@@ -39,7 +39,7 @@ pnpm run build:web
 pnpm run build:cli
 ```
 
-Note: `build:web` requires Supabase env values (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`).
+Note: `build:web` requires Supabase env values (`SUPABASE_URL`, `SUPABASE_ANON_KEY`).
 
 ## Checks
 
@@ -54,13 +54,14 @@ pnpm run fmt:cli
 ## Environment variables
 
 - Shared env file: `./.env.local` (repo root), used by both Web and CLI
-- Web reads root env via `apps/web/next.config.mjs`
+- Web commands (`dev/build/start`) load env in this order:
+  - `./.env.local`, `./.env` (repo root)
+  - `apps/web/.env.local`, `apps/web/.env` (fallback)
 - CLI reads root env first, then falls back to app/home env files
-- Recommended shared keys:
-  - `NEXT_PUBLIC_SUPABASE_URL`
-  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- Canonical shared keys:
   - `SUPABASE_URL`
   - `SUPABASE_ANON_KEY`
+- Web auto-maps these to `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` when missing.
 
 ## CI
 

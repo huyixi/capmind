@@ -3,12 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "next build --webpack",
-    "dev": "pnpm run open-browser & next dev",
+    "build": "node scripts/with-root-env.mjs pnpm exec next build --webpack",
+    "dev": "pnpm run open-browser & node scripts/with-root-env.mjs pnpm exec next dev",
     "open-browser": "open http://localhost:3000",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "start": "next start",
+    "start": "node scripts/with-root-env.mjs pnpm exec next start",
     "perf:check": "node scripts/perf-lighthouse.mjs",
     "perf:check:quick": "node scripts/perf-lighthouse.mjs --skip-build",
     "perf:report": "node scripts/perf-lighthouse.mjs --skip-build --no-assert"

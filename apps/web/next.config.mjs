@@ -6,6 +6,7 @@ import nextPWA from "next-pwa";
 /** @type {import('next').NextConfig} */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const webRoot = __dirname;
 const monorepoRoot = path.resolve(__dirname, "../..");
 
 const applyEnvFile = (filePath) => {
@@ -43,10 +44,35 @@ const applyEnvFile = (filePath) => {
   }
 };
 
+const applySupabaseAliases = () => {
+  if (!process.env.SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    process.env.SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  }
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_URL) {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = process.env.SUPABASE_URL;
+  }
+
+  if (
+    !process.env.SUPABASE_ANON_KEY &&
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  ) {
+    process.env.SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  }
+  if (
+    !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY &&
+    process.env.SUPABASE_ANON_KEY
+  ) {
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+  }
+};
+
 applyEnvFile(path.join(monorepoRoot, ".env.local"));
 applyEnvFile(path.join(monorepoRoot, ".env"));
+applyEnvFile(path.join(webRoot, ".env.local"));
+applyEnvFile(path.join(webRoot, ".env"));
+applySupabaseAliases();
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseUrl = process.env.SUPABASE_URL;
 
 let supabasePattern = null;
 if (supabaseUrl) {

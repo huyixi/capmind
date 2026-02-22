@@ -23,18 +23,29 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+      if (error) {
+        setError(error.message);
+        return;
+      }
 
-    if (error) {
-      setError(error.message);
-      setLoading(false);
-    } else {
       router.push("/");
       router.refresh();
+    } catch (err) {
+      if (err instanceof TypeError && err.message.includes("Failed to fetch")) {
+        setError(
+          "Cannot reach Supabase. Check SUPABASE_URL/SUPABASE_ANON_KEY in cap-mind/.env.local and restart dev server.",
+        );
+        return;
+      }
+      setError(err instanceof Error ? err.message : "Unexpected login error");
+    } finally {
+      setLoading(false);
     }
   };
 

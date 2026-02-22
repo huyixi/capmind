@@ -37,5 +37,5 @@ jobs:
       - name: Build
         run: pnpm run build:web
         env:
-          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: dummy-anon-key
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_ANON_KEY: dummy-anon-key
