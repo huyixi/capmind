@@ -14,6 +14,7 @@ pub struct Cli {
 pub enum Commands {
     Add(AddArgs),
     Login,
+    Compose,
 }
 
 #[derive(Debug, Args)]
@@ -27,6 +28,10 @@ where
     I: IntoIterator<Item = String>,
 {
     let argv: Vec<String> = args.into_iter().collect();
+    if argv.len() == 1 {
+        return vec![argv[0].clone(), "compose".to_string()];
+    }
+
     if argv.len() != 2 {
         return argv;
     }
@@ -35,7 +40,7 @@ where
     if first.starts_with('-') {
         return argv;
     }
-    if matches!(first, "add" | "login" | "help") {
+    if matches!(first, "add" | "login" | "help" | "compose") {
         return argv;
     }
 
@@ -130,6 +135,13 @@ mod tests {
         let input = vec!["cap".to_string(), "hello".to_string()];
         let output = rewrite_shortcut_args(input);
         assert_eq!(output, vec!["cap", "add", "--text", "hello"]);
+    }
+
+    #[test]
+    fn rewrites_no_arg_to_compose() {
+        let input = vec!["cap".to_string()];
+        let output = rewrite_shortcut_args(input);
+        assert_eq!(output, vec!["cap", "compose"]);
     }
 
     #[test]

@@ -34,19 +34,33 @@ The CLI auto-loads env files in this order (first found values are used):
 
 ## Usage
 
-### 1) Login (interactive, one-time)
+### 1) Compose in TUI (default)
+
+```bash
+cargo run --
+```
+
+TUI keys:
+
+- `Enter`: insert newline
+- `Ctrl+Enter`: submit memo
+- `Ctrl+S`: submit memo (fallback for terminals that don't detect `Ctrl+Enter`)
+- `Tab`: switch focus between History and Composer panes
+- `Esc` / `Ctrl+C`: quit TUI
+
+### 2) Login (interactive, one-time)
 
 ```bash
 cargo run -- login
 ```
 
-### 2) Text via `--text`
+### 3) Text via `--text`
 
 ```bash
 cargo run -- add --text "hello from rust cli"
 ```
 
-### 3) Quick shortcut
+### 4) Quick shortcut
 
 ```bash
 cargo run -- "hello from shortcut"
@@ -60,7 +74,7 @@ cargo run -- add --text "hello from shortcut"
 
 Shortcut scope is intentionally narrow: only a single positional text argument is rewritten.
 
-### 4) Text via stdin
+### 5) Text via stdin
 
 ```bash
 echo "hello from stdin" | cargo run -- add

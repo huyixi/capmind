@@ -3,12 +3,15 @@ mod cli;
 mod env_loader;
 mod error;
 mod session_store;
+mod submission;
 mod supabase;
+mod tui;
 
 use clap::Parser;
 use cli::{Cli, Commands, resolve_text, rewrite_shortcut_args};
 
-use crate::auth::{authenticate_with_stored_token, login_interactive};
+use crate::auth::login_interactive;
+use crate::submission::submit_memo;
 use crate::supabase::SupabaseClient;
 
 #[tokio::main]
@@ -35,12 +38,14 @@ async fn run() -> Result<(), error::AppError> {
         }
         Commands::Add(args) => {
             let text = resolve_text(args.text.clone())?;
-            let session = authenticate_with_stored_token(&client).await?;
-            let inserted = client.insert_memo(&session.access_token, &text).await?;
+            let submitted = submit_memo(&client, &text).await?;
             println!(
                 "Inserted memo successfully\nmemo_id: {}\ncreated_at: {}\nexpires_at: {}",
-                inserted.id, inserted.created_at, session.expires_at
+                submitted.inserted.id, submitted.inserted.created_at, submitted.session.expires_at
             );
+        }
+        Commands::Compose => {
+            tui::run(&client).await?;
         }
     }
 
