@@ -25,10 +25,12 @@ export SUPABASE_ANON_KEY="YOUR_ANON_KEY"
 
 The CLI auto-loads env files in this order (first found values are used):
 
-1. `./.env.local`
-2. `./.env`
-3. `~/.capmind/.env.local`
-4. `~/.capmind/.env`
+1. `../../.env.local` (monorepo root)
+2. `../../.env` (monorepo root)
+3. `./.env.local`
+4. `./.env`
+5. `~/.capmind/.env.local`
+6. `~/.capmind/.env`
 
 ## Usage
 

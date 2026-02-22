@@ -1,4 +1,4 @@
-# cap-monorepo
+# cap-mind
 
 Monorepo containing:
 
@@ -53,8 +53,14 @@ pnpm run fmt:cli
 
 ## Environment variables
 
-- Web env files stay under `apps/web` (`.env.local`, `.env*`)
-- CLI reads `SUPABASE_URL` and `SUPABASE_ANON_KEY` from shell or env files (`apps/cli/.env*` and `~/.capmind/.env*`)
+- Shared env file: `./.env.local` (repo root), used by both Web and CLI
+- Web reads root env via `apps/web/next.config.mjs`
+- CLI reads root env first, then falls back to app/home env files
+- Recommended shared keys:
+  - `NEXT_PUBLIC_SUPABASE_URL`
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+  - `SUPABASE_URL`
+  - `SUPABASE_ANON_KEY`
 
 ## CI
 

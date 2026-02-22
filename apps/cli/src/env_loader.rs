@@ -54,13 +54,29 @@ fn load_file_env() -> HashMap<String, String> {
 }
 
 fn candidate_paths() -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from(".env.local"), PathBuf::from(".env")];
+    let mut paths = Vec::new();
+
+    if let Some(workspace_root) = workspace_root_from_manifest_dir() {
+        paths.push(workspace_root.join(".env.local"));
+        paths.push(workspace_root.join(".env"));
+    }
+
+    paths.push(PathBuf::from(".env.local"));
+    paths.push(PathBuf::from(".env"));
+
     if let Ok(home) = std::env::var("HOME") {
         let capmind = PathBuf::from(home).join(".capmind");
         paths.push(capmind.join(".env.local"));
         paths.push(capmind.join(".env"));
     }
     paths
+}
+
+fn workspace_root_from_manifest_dir() -> Option<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let apps_dir = manifest_dir.parent()?;
+    let workspace_root = apps_dir.parent()?;
+    Some(workspace_root.to_path_buf())
 }
 
 fn parse_line(raw: &str) -> Option<(String, String)> {

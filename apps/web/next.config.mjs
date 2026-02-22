@@ -1,6 +1,51 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import nextPWA from "next-pwa";
 
 /** @type {import('next').NextConfig} */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const monorepoRoot = path.resolve(__dirname, "../..");
+
+const applyEnvFile = (filePath) => {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+
+  const content = fs.readFileSync(filePath, "utf8");
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+
+    const normalized = line.startsWith("export ")
+      ? line.slice("export ".length)
+      : line;
+    const eqIndex = normalized.indexOf("=");
+    if (eqIndex <= 0) {
+      continue;
+    }
+
+    const key = normalized.slice(0, eqIndex).trim();
+    let value = normalized.slice(eqIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    if (!process.env[key]) {
+      process.env[key] = value;
+    }
+  }
+};
+
+applyEnvFile(path.join(monorepoRoot, ".env.local"));
+applyEnvFile(path.join(monorepoRoot, ".env"));
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 
 let supabasePattern = null;
