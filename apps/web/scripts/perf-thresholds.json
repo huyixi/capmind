@@ -1,0 +1,11 @@
+{
+  "performanceScoreMin": 75,
+  "firstContentfulPaintMsMax": 2500,
+  "largestContentfulPaintMsMax": 3500,
+  "interactionToNextPaintMsMax": 300,
+  "totalBlockingTimeMsMax": 300,
+  "speedIndexMsMax": 4500,
+  "cumulativeLayoutShiftMax": 0.12,
+  "totalByteWeightBytesMax": 1200000,
+  "memoContainerEntryBytesMax": 30000
+}

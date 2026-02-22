@@ -1,0 +1,33 @@
+name: cli-ci
+
+on:
+  push:
+    paths:
+      - "apps/cli/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "turbo.json"
+      - ".github/workflows/cli-ci.yml"
+  pull_request:
+    paths:
+      - "apps/cli/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "turbo.json"
+      - ".github/workflows/cli-ci.yml"
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format check
+        run: cargo fmt --manifest-path apps/cli/Cargo.toml -- --check
+      - name: Lint
+        run: cargo clippy --manifest-path apps/cli/Cargo.toml --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --manifest-path apps/cli/Cargo.toml

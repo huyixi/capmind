@@ -1,0 +1,31 @@
+{
+  "name": "cap-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.30.1",
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "dev:web": "turbo run dev --filter=./apps/web",
+    "dev:cli": "turbo run dev --filter=./apps/cli",
+    "build": "turbo run build",
+    "build:web": "turbo run build --filter=./apps/web",
+    "build:cli": "turbo run build --filter=./apps/cli",
+    "lint": "turbo run lint",
+    "lint:web": "turbo run lint --filter=./apps/web",
+    "lint:cli": "turbo run lint --filter=./apps/cli",
+    "typecheck": "turbo run typecheck",
+    "typecheck:web": "turbo run typecheck --filter=./apps/web",
+    "test": "turbo run test",
+    "test:cli": "turbo run test --filter=./apps/cli",
+    "fmt:cli": "turbo run fmt --filter=./apps/cli"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "@types/react": "19.2.10",
+      "@types/react-dom": "19.2.3"
+    }
+  }
+}
