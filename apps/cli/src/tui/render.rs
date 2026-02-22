@@ -8,17 +8,8 @@ use super::types::FocusArea;
 
 pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget) {
     let area = frame.area();
-    let composer_height = widget
-        .bottom_pane()
-        .composer()
-        .desired_height()
-        .min(area.height.saturating_sub(3))
-        .max(3);
-    let layout = Layout::vertical([
-        Constraint::Min(area.height.saturating_sub(composer_height)),
-        Constraint::Length(composer_height),
-    ])
-    .split(area);
+    let layout =
+        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
 
     render_history(frame, layout[0], widget);
     render_composer(frame, layout[1], widget);

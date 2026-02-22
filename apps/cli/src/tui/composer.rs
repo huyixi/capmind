@@ -70,12 +70,6 @@ impl Composer {
         &self.lines
     }
 
-    pub fn desired_height(&self) -> u16 {
-        let lines = self.lines.len() as u16;
-        let content = lines.clamp(4, 10);
-        content + 2
-    }
-
     pub fn ensure_cursor_visible(&mut self, viewport_height: u16) {
         if viewport_height == 0 {
             return;

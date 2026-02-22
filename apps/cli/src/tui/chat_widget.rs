@@ -53,10 +53,6 @@ impl ChatWidget {
         }
     }
 
-    pub fn bottom_pane(&self) -> &BottomPane {
-        &self.bottom_pane
-    }
-
     pub fn bottom_pane_mut(&mut self) -> &mut BottomPane {
         &mut self.bottom_pane
     }
