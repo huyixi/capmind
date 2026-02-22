@@ -60,3 +60,4 @@ pnpm run fmt:cli
 
 - `web-ci`: path-scoped workflow for `apps/web/**`
 - `cli-ci`: path-scoped workflow for `apps/cli/**`
+- `cli-release`: independent CLI release workflow (manual or push tag `cli-v*`)
