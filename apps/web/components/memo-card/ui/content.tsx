@@ -235,7 +235,7 @@ export function MemoCardContent({
             <p
               id={contentId}
               ref={contentRef}
-              className="memo-card-text text-foreground whitespace-pre-wrap wrap-break-words"
+              className="memo-card-text text-foreground whitespace-pre-wrap break-words"
             >
               {linkifiedMemoText}
             </p>
@@ -257,7 +257,7 @@ export function MemoCardContent({
           <p
             id={contentId}
             ref={contentRef}
-            className="memo-card-text text-foreground whitespace-pre-wrap wrap-break-words"
+            className="memo-card-text text-foreground whitespace-pre-wrap break-words"
           >
             {linkifiedMemoText}
           </p>

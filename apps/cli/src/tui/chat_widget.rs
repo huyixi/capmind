@@ -331,7 +331,21 @@ impl ChatWidget {
                 self.move_history_selection(-1);
                 WidgetAction::None
             }
+            KeyCode::Char(c)
+                if (key_event.modifiers.is_empty() || key_event.modifiers == KeyModifiers::SHIFT)
+                    && c.eq_ignore_ascii_case(&'k') =>
+            {
+                self.move_history_selection(-1);
+                WidgetAction::None
+            }
             KeyCode::Down => {
+                self.move_history_selection(1);
+                WidgetAction::None
+            }
+            KeyCode::Char(c)
+                if (key_event.modifiers.is_empty() || key_event.modifiers == KeyModifiers::SHIFT)
+                    && c.eq_ignore_ascii_case(&'j') =>
+            {
                 self.move_history_selection(1);
                 WidgetAction::None
             }
@@ -809,6 +823,35 @@ mod tests {
 
         let action = widget.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
         assert_eq!(action, WidgetAction::Quit);
+    }
+
+    #[test]
+    fn j_and_k_navigate_history_like_arrows() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![
+            RecentMemo {
+                id: "memo-2".to_string(),
+                text: "memo-2".to_string(),
+                created_at: "2026-02-23T02:00:00Z".to_string(),
+                version: "2".to_string(),
+                deleted_at: None,
+            },
+            RecentMemo {
+                id: "memo-1".to_string(),
+                text: "memo-1".to_string(),
+                created_at: "2026-02-23T01:00:00Z".to_string(),
+                version: "1".to_string(),
+                deleted_at: None,
+            },
+        ]);
+        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(widget.selected_history(), Some(1));
+
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert_eq!(widget.selected_history(), Some(0));
+
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert_eq!(widget.selected_history(), Some(1));
     }
 
     #[test]

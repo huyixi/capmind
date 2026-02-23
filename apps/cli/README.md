@@ -48,6 +48,8 @@ TUI keys:
 - `Shift+Enter`: submit memo
 - `Ctrl+S`: submit memo (fallback for terminals that don't emit `Ctrl+Enter`)
 - `Tab`: switch focus between Composer (top) and History (bottom) panes
+- `↑` / `k` (in History): move selection up
+- `↓` / `j` (in History): move selection down
 - `Enter` (in History): load selected memo into Composer for edit mode
 - `q` (in History): quit TUI
 - `r` (in History): refresh memo list

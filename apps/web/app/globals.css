@@ -158,6 +158,11 @@
         flex-direction: column;
     }
 
+    .memo-card-text {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+
     .memo-card-expand-input {
         position: absolute;
         inline-size: 1px;
