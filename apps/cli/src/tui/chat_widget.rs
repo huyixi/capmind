@@ -1,9 +1,11 @@
 use std::collections::VecDeque;
 
+use chrono::{DateTime, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crate::supabase::RecentMemo;
 
 use super::bottom_pane::{BottomPane, InputResult};
-use super::types::{FocusArea, HistoryCell, HistoryKind, MAX_HISTORY_ITEMS};
+use super::types::{FocusArea, HistoryCell, MAX_HISTORY_ITEMS};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WidgetAction {
@@ -18,7 +20,6 @@ pub struct ChatWidget {
     history: VecDeque<HistoryCell>,
     selected_history: usize,
     focus: FocusArea,
-    status_line: Option<String>,
 }
 
 impl Default for ChatWidget {
@@ -34,7 +35,6 @@ impl ChatWidget {
             history: VecDeque::new(),
             selected_history: 0,
             focus: FocusArea::Composer,
-            status_line: None,
         }
     }
 
@@ -76,32 +76,39 @@ impl ChatWidget {
         self.focus
     }
 
-    pub fn status_line(&self) -> Option<&str> {
-        self.status_line.as_deref()
-    }
-
-    pub fn on_submit_success(&mut self, text: &str, memo_id: &str, created_at: &str) {
-        self.push_history(HistoryKind::Submitted, text.to_string());
-        self.status_line = Some(format!(
-            "submitted memo_id={memo_id} created_at={created_at}"
-        ));
+    pub fn on_submit_success(&mut self, text: &str, _memo_id: &str, created_at: &str) {
+        self.push_history_with_created_at(
+            text.to_string(),
+            parse_timestamp(created_at).unwrap_or_else(Utc::now),
+        );
         self.bottom_pane.composer_mut().clear();
         self.focus = FocusArea::Composer;
     }
 
     pub fn on_submit_error(&mut self, text: &str, message: &str) {
         let full_text = format!("{message}\n\n{text}");
-        self.push_history(HistoryKind::Error, full_text);
-        self.status_line = Some(format!("submit failed: {message}"));
+        self.push_history(full_text);
     }
 
     pub fn on_validation_error(&mut self, message: &str) {
-        self.push_history(HistoryKind::Error, message.to_string());
-        self.status_line = Some(message.to_string());
+        self.push_history(message.to_string());
     }
 
-    pub fn set_submitting(&mut self) {
-        self.status_line = Some("submitting...".to_string());
+    pub fn hydrate_history_from_memos(&mut self, memos: Vec<RecentMemo>) {
+        if !self.history.is_empty() {
+            return;
+        }
+
+        for memo in memos.into_iter().rev() {
+            let text = memo.text.trim().to_string();
+            if text.is_empty() {
+                continue;
+            }
+            self.push_history_with_created_at(
+                text,
+                parse_timestamp(&memo.created_at).unwrap_or_else(Utc::now),
+            );
+        }
     }
 
     fn handle_composer_key(&mut self, key_event: KeyEvent) -> WidgetAction {
@@ -161,18 +168,31 @@ impl ChatWidget {
         };
         self.bottom_pane.composer_mut().set_text(&cell.full_text);
         self.focus = FocusArea::Composer;
-        self.push_history(HistoryKind::DraftLoaded, cell.full_text);
-        self.status_line = Some("loaded draft into composer".to_string());
+        self.push_history(cell.full_text);
     }
 
-    fn push_history(&mut self, kind: HistoryKind, full_text: String) {
+    fn push_history(&mut self, full_text: String) {
+        self.push_history_cell(HistoryCell::new(full_text));
+    }
+
+    fn push_history_with_created_at(&mut self, full_text: String, created_at: DateTime<Utc>) {
+        self.push_history_cell(HistoryCell::with_created_at(full_text, created_at));
+    }
+
+    fn push_history_cell(&mut self, cell: HistoryCell) {
         if self.history.len() >= MAX_HISTORY_ITEMS {
             self.history.pop_front();
             self.selected_history = self.selected_history.saturating_sub(1);
         }
-        self.history.push_back(HistoryCell::new(kind, full_text));
+        self.history.push_back(cell);
         self.selected_history = self.history.len().saturating_sub(1);
     }
+}
+
+fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|parsed| parsed.with_timezone(&Utc))
 }
 
 fn is_ctrl_c(key_event: KeyEvent) -> bool {
@@ -184,4 +204,126 @@ fn is_ctrl_c(key_event: KeyEvent) -> bool {
             ..
         } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c')
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChatWidget;
+    use crate::supabase::RecentMemo;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn push_history_keeps_only_latest_three() {
+        let mut widget = ChatWidget::new();
+        widget.on_validation_error("one");
+        widget.on_submit_success("two", "memo_2", "2026-02-23T00:00:00Z");
+        widget.on_submit_error("three", "err-3");
+        widget.on_validation_error("four");
+
+        assert_eq!(widget.history().len(), 3);
+        assert_eq!(
+            history_texts(&widget),
+            vec![
+                "two".to_string(),
+                "err-3\n\nthree".to_string(),
+                "four".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn history_eviction_keeps_latest_entries_ordered() {
+        let mut widget = ChatWidget::new();
+        widget.on_validation_error("entry-1");
+        widget.on_validation_error("entry-2");
+        widget.on_validation_error("entry-3");
+        widget.on_validation_error("entry-4");
+        widget.on_validation_error("entry-5");
+
+        assert_eq!(widget.history().len(), 3);
+        assert_eq!(
+            history_texts(&widget),
+            vec![
+                "entry-3".to_string(),
+                "entry-4".to_string(),
+                "entry-5".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn selected_history_remains_valid_after_eviction() {
+        let mut widget = ChatWidget::new();
+        widget.on_validation_error("a");
+        widget.on_validation_error("b");
+        widget.on_validation_error("c");
+
+        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        widget.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        widget.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(widget.selected_history(), Some(0));
+
+        widget.on_validation_error("d");
+        assert_eq!(widget.history().len(), 3);
+        assert_eq!(widget.selected_history(), Some(2));
+    }
+
+    #[test]
+    fn hydrate_history_from_memos_uses_only_memos_and_respects_order() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![
+            RecentMemo {
+                text: "memo-newest".to_string(),
+                created_at: "2026-02-23T03:00:00Z".to_string(),
+            },
+            RecentMemo {
+                text: "memo-middle".to_string(),
+                created_at: "2026-02-23T02:00:00Z".to_string(),
+            },
+            RecentMemo {
+                text: "memo-oldest".to_string(),
+                created_at: "2026-02-23T01:00:00Z".to_string(),
+            },
+        ]);
+
+        assert_eq!(
+            history_texts(&widget),
+            vec![
+                "memo-oldest".to_string(),
+                "memo-middle".to_string(),
+                "memo-newest".to_string()
+            ]
+        );
+        assert_eq!(widget.selected_history(), Some(2));
+    }
+
+    #[test]
+    fn hydrate_history_from_memos_does_not_override_existing_history() {
+        let mut widget = ChatWidget::new();
+        widget.on_validation_error("local-entry");
+        widget.hydrate_history_from_memos(vec![
+            RecentMemo {
+                text: "memo-newest".to_string(),
+                created_at: "2026-02-23T03:00:00Z".to_string(),
+            },
+            RecentMemo {
+                text: "memo-middle".to_string(),
+                created_at: "2026-02-23T02:00:00Z".to_string(),
+            },
+            RecentMemo {
+                text: "memo-oldest".to_string(),
+                created_at: "2026-02-23T01:00:00Z".to_string(),
+            },
+        ]);
+
+        assert_eq!(history_texts(&widget), vec!["local-entry".to_string()]);
+    }
+
+    fn history_texts(widget: &ChatWidget) -> Vec<String> {
+        widget
+            .history()
+            .iter()
+            .map(|cell| cell.full_text.clone())
+            .collect()
+    }
 }

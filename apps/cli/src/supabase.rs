@@ -21,6 +21,12 @@ pub struct InsertedMemo {
 }
 
 #[derive(Debug, Clone)]
+pub struct RecentMemo {
+    pub text: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct SupabaseClient {
     base_url: String,
     anon_key: String,
@@ -43,6 +49,12 @@ struct InsertMemoRequest<'a> {
 #[derive(Debug, Deserialize)]
 struct InsertMemoResponse {
     id: String,
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListMemoResponse {
+    text: String,
     created_at: String,
 }
 
@@ -176,6 +188,51 @@ impl SupabaseClient {
             id: row.id,
             created_at: row.created_at,
         })
+    }
+
+    pub async fn list_recent_memos(
+        &self,
+        access_token: &str,
+        limit: usize,
+    ) -> Result<Vec<RecentMemo>, AppError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let endpoint = format!(
+            "{}/rest/v1/memos?select=text,created_at&order=created_at.desc&limit={limit}",
+            self.base_url
+        );
+        let response = self
+            .http
+            .get(endpoint)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .await
+            .map_err(|err| AppError::Network(format!("Supabase list request failed: {err}")))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = read_error_body(response).await;
+            let message = format!("List memos failed ({status}): {body}");
+            if status == StatusCode::UNAUTHORIZED {
+                return Err(AppError::Auth(message));
+            }
+            return Err(AppError::Api(message));
+        }
+
+        let rows: Vec<ListMemoResponse> = response
+            .json()
+            .await
+            .map_err(|err| AppError::Api(format!("Invalid list response JSON: {err}")))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| RecentMemo {
+                text: row.text,
+                created_at: row.created_at,
+            })
+            .collect())
     }
 }
 

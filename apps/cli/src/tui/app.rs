@@ -8,20 +8,27 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use tokio::sync::mpsc::{self, UnboundedReceiver};
 
+use crate::auth::authenticate_with_stored_token;
 use crate::cli::resolve_text;
 use crate::error::AppError;
 use crate::submission::submit_memo;
-use crate::supabase::SupabaseClient;
+use crate::supabase::{RecentMemo, SupabaseClient};
 
 use super::chat_widget::{ChatWidget, WidgetAction};
 use super::render;
 use super::theme::{UiTheme, build_ui_theme, detect_terminal_palette};
+use super::types::MAX_HISTORY_ITEMS;
 
 pub struct ComposeApp<'a> {
     client: &'a SupabaseClient,
     widget: ChatWidget,
     theme: UiTheme,
+}
+
+enum BackgroundEvent {
+    HistoryLoaded(Vec<RecentMemo>),
 }
 
 impl<'a> ComposeApp<'a> {
@@ -37,8 +44,10 @@ impl<'a> ComposeApp<'a> {
 
     pub async fn run(mut self) -> Result<(), AppError> {
         let mut terminal = TerminalSession::new()?;
+        let mut background_rx = self.start_history_loader();
 
         loop {
+            self.drain_background_events(&mut background_rx);
             terminal.draw(&mut self.widget, &self.theme)?;
 
             let has_event = event::poll(Duration::from_millis(120))
@@ -57,14 +66,40 @@ impl<'a> ComposeApp<'a> {
                 WidgetAction::None => {}
                 WidgetAction::Quit => break,
                 WidgetAction::Submit(text) => {
-                    self.widget.set_submitting();
-                    terminal.draw(&mut self.widget, &self.theme)?;
                     self.handle_submit(text).await;
                 }
             }
         }
 
         Ok(())
+    }
+
+    fn start_history_loader(&self) -> UnboundedReceiver<BackgroundEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let client = (*self.client).clone();
+        tokio::spawn(async move {
+            let Ok(session) = authenticate_with_stored_token(&client).await else {
+                return;
+            };
+            let Ok(memos) = client
+                .list_recent_memos(&session.access_token, MAX_HISTORY_ITEMS)
+                .await
+            else {
+                return;
+            };
+            let _ = tx.send(BackgroundEvent::HistoryLoaded(memos));
+        });
+        rx
+    }
+
+    fn drain_background_events(&mut self, rx: &mut UnboundedReceiver<BackgroundEvent>) {
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                BackgroundEvent::HistoryLoaded(memos) => {
+                    self.widget.hydrate_history_from_memos(memos);
+                }
+            }
+        }
     }
 
     async fn handle_submit(&mut self, text: String) {

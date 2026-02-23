@@ -46,8 +46,11 @@ TUI keys:
 - `Ctrl+Enter`: submit memo
 - `Shift+Enter`: submit memo
 - `Ctrl+S`: submit memo (fallback for terminals that don't emit `Ctrl+Enter`)
-- `Tab`: switch focus between History and Composer panes
+- `Tab`: switch focus between Composer (top) and History (bottom) panes
 - `Esc` / `Ctrl+C`: quit TUI
+
+TUI history keeps the latest 3 entries.
+Latest memos are loaded into history in the background after startup (non-blocking).
 
 ### 2) Login (interactive, one-time)
 
