@@ -49,6 +49,7 @@ TUI keys:
 - `Tab`: switch focus between Composer (top) and History (bottom) panes
 - `Enter` (in History): load selected memo into Composer for edit mode
 - `q` (in History): quit TUI
+- `r` (in History): refresh memo list
 - `Esc`: press twice to quit TUI (with confirmation)
 - `Ctrl+C`: quit TUI immediately
 - `d` (in History): open delete confirmation for selected memo

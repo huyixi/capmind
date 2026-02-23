@@ -17,6 +17,7 @@ pub enum WidgetAction {
         expected_version: String,
         text: String,
     },
+    RefreshHistory,
     DeleteMemo {
         memo_id: String,
         expected_version: String,
@@ -258,6 +259,46 @@ impl ChatWidget {
         }
     }
 
+    pub fn refresh_history_from_memos(&mut self, memos: Vec<RecentMemo>) {
+        let selected_memo_id = self
+            .selected_history()
+            .and_then(|index| self.history.get(index))
+            .and_then(|cell| cell.memo_id.clone());
+
+        self.history.clear();
+        self.selected_history = 0;
+
+        for memo in memos.into_iter().rev() {
+            if memo.deleted_at.is_some() {
+                continue;
+            }
+            let text = memo.text.trim().to_string();
+            if text.is_empty() {
+                continue;
+            }
+            self.push_history_memo(
+                text,
+                parse_timestamp(&memo.created_at).unwrap_or_else(Utc::now),
+                memo.id,
+                memo.version,
+            );
+        }
+
+        if self.history.is_empty() {
+            self.focus = FocusArea::Composer;
+            return;
+        }
+
+        if let Some(selected_memo_id) = selected_memo_id
+            && let Some(position) = self
+                .history
+                .iter()
+                .position(|cell| cell.memo_id.as_deref() == Some(selected_memo_id.as_str()))
+        {
+            self.selected_history = position;
+        }
+    }
+
     fn handle_composer_key(&mut self, key_event: KeyEvent) -> WidgetAction {
         match self.bottom_pane.handle_key_event(key_event) {
             InputResult::None => WidgetAction::None,
@@ -302,6 +343,7 @@ impl ChatWidget {
                 self.start_delete_confirmation();
                 WidgetAction::None
             }
+            KeyCode::Char(c) if c.eq_ignore_ascii_case(&'r') => WidgetAction::RefreshHistory,
             KeyCode::Esc => WidgetAction::None,
             _ => WidgetAction::None,
         }
@@ -779,6 +821,15 @@ mod tests {
     }
 
     #[test]
+    fn r_in_history_emits_refresh_history_action() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        let action = widget.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert_eq!(action, WidgetAction::RefreshHistory);
+    }
+
+    #[test]
     fn d_starts_confirmation_and_enter_confirms_delete() {
         let mut widget = ChatWidget::new();
         widget.hydrate_history_from_memos(vec![RecentMemo {
@@ -868,6 +919,35 @@ mod tests {
         });
 
         assert!(widget.history().is_empty());
+    }
+
+    #[test]
+    fn refresh_history_from_memos_replaces_existing_entries() {
+        let mut widget = ChatWidget::new();
+        widget.on_submit_success("memo-1", "memo-1", "2026-02-23T01:00:00Z", "1");
+        widget.on_validation_error("local-entry");
+
+        widget.refresh_history_from_memos(vec![
+            RecentMemo {
+                id: "memo-3".to_string(),
+                text: "memo-3".to_string(),
+                created_at: "2026-02-23T03:00:00Z".to_string(),
+                version: "3".to_string(),
+                deleted_at: None,
+            },
+            RecentMemo {
+                id: "memo-2".to_string(),
+                text: "memo-2".to_string(),
+                created_at: "2026-02-23T02:00:00Z".to_string(),
+                version: "2".to_string(),
+                deleted_at: None,
+            },
+        ]);
+
+        assert_eq!(
+            history_texts(&widget),
+            vec!["memo-2".to_string(), "memo-3".to_string()]
+        );
     }
 
     fn history_texts(widget: &ChatWidget) -> Vec<String> {

@@ -4,7 +4,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use crate::error::AppError;
 
 #[derive(Debug, Parser)]
-#[command(name = "cap-cli", version, about = "Insert memos into Supabase")]
+#[command(name = "cap", version, about = "Insert memos into Supabase")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,

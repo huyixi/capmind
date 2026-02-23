@@ -65,6 +65,9 @@ impl<'a> ComposeApp<'a> {
             match self.widget.handle_key_event(key_event) {
                 WidgetAction::None => {}
                 WidgetAction::Quit => break,
+                WidgetAction::RefreshHistory => {
+                    self.handle_refresh_history().await;
+                }
                 WidgetAction::SubmitCreate(text) => {
                     self.handle_submit_create(text).await;
                 }
@@ -232,6 +235,28 @@ impl<'a> ComposeApp<'a> {
                 }
             }
             Err(err) => self.widget.on_delete_error(&err.to_string()),
+        }
+    }
+
+    async fn handle_refresh_history(&mut self) {
+        let session = match authenticate_with_stored_token(self.client).await {
+            Ok(session) => session,
+            Err(err) => {
+                self.widget
+                    .on_validation_error(&format!("Refresh memo list failed: {err}"));
+                return;
+            }
+        };
+
+        match self
+            .client
+            .list_recent_memos(&session.access_token, MAX_HISTORY_ITEMS)
+            .await
+        {
+            Ok(memos) => self.widget.refresh_history_from_memos(memos),
+            Err(err) => self
+                .widget
+                .on_validation_error(&format!("Refresh memo list failed: {err}")),
         }
     }
 }
