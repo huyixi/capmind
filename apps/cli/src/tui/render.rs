@@ -62,15 +62,20 @@ fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget, colors
         })
         .collect();
 
+    let history_focused = widget.focus() == FocusArea::History;
+    let highlight_style = if history_focused {
+        Style::default()
+            .fg(Color::Reset)
+            .bg(Color::Reset)
+            .add_modifier(Modifier::REVERSED)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        pane_style
+    };
+
     let list = List::new(items)
         .style(pane_style)
-        .highlight_style(
-            Style::default()
-                .fg(Color::Reset)
-                .bg(Color::Reset)
-                .add_modifier(Modifier::REVERSED)
-                .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(highlight_style)
         .highlight_symbol("");
     let mut state = ListState::default();
     state.select(widget.selected_history());
@@ -310,4 +315,5 @@ mod tests {
         assert_eq!(text, "Press Esc again to quit");
         assert!(is_placeholder);
     }
+
 }
