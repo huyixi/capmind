@@ -18,12 +18,28 @@ pub struct Session {
 pub struct InsertedMemo {
     pub id: String,
     pub created_at: String,
+    pub version: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct RecentMemo {
+    pub id: String,
     pub text: String,
     pub created_at: String,
+    pub version: String,
+    pub deleted_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum UpdateMemoOutcome {
+    Updated(RecentMemo),
+    Conflict,
+}
+
+#[derive(Debug, Clone)]
+pub enum DeleteMemoOutcome {
+    Deleted,
+    Conflict,
 }
 
 #[derive(Debug, Clone)]
@@ -50,12 +66,39 @@ struct InsertMemoRequest<'a> {
 struct InsertMemoResponse {
     id: String,
     created_at: String,
+    version: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
 struct ListMemoResponse {
+    id: String,
     text: String,
     created_at: String,
+    version: serde_json::Value,
+    deleted_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateMemoRequest<'a> {
+    text: &'a str,
+    updated_at: &'a str,
+    version: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct DeleteMemoRequest<'a> {
+    deleted_at: &'a str,
+    updated_at: &'a str,
+    version: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoRowResponse {
+    id: String,
+    text: String,
+    created_at: String,
+    version: serde_json::Value,
+    deleted_at: Option<String>,
 }
 
 impl SupabaseClient {
@@ -187,6 +230,7 @@ impl SupabaseClient {
         Ok(InsertedMemo {
             id: row.id,
             created_at: row.created_at,
+            version: normalize_version_value(&row.version)?,
         })
     }
 
@@ -200,7 +244,7 @@ impl SupabaseClient {
         }
 
         let endpoint = format!(
-            "{}/rest/v1/memos?select=text,created_at&order=created_at.desc&limit={limit}",
+            "{}/rest/v1/memos?select=id,text,created_at,version,deleted_at&deleted_at=is.null&order=updated_at.desc&limit={limit}",
             self.base_url
         );
         let response = self
@@ -226,13 +270,163 @@ impl SupabaseClient {
             .json()
             .await
             .map_err(|err| AppError::Api(format!("Invalid list response JSON: {err}")))?;
-        Ok(rows
-            .into_iter()
-            .map(|row| RecentMemo {
-                text: row.text,
-                created_at: row.created_at,
+        rows.into_iter()
+            .map(|row| {
+                row_to_recent_memo(MemoRowResponse {
+                    id: row.id,
+                    text: row.text,
+                    created_at: row.created_at,
+                    version: row.version,
+                    deleted_at: row.deleted_at,
+                })
             })
-            .collect())
+            .collect()
+    }
+
+    pub async fn get_memo_by_id(
+        &self,
+        access_token: &str,
+        memo_id: &str,
+    ) -> Result<RecentMemo, AppError> {
+        let endpoint = format!(
+            "{}/rest/v1/memos?select=id,text,created_at,version,deleted_at&id=eq.{memo_id}&limit=1",
+            self.base_url
+        );
+        let response = self
+            .http
+            .get(endpoint)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .await
+            .map_err(|err| AppError::Network(format!("Supabase get request failed: {err}")))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = read_error_body(response).await;
+            let message = format!("Get memo failed ({status}): {body}");
+            if status == StatusCode::UNAUTHORIZED {
+                return Err(AppError::Auth(message));
+            }
+            return Err(AppError::Api(message));
+        }
+
+        let rows: Vec<MemoRowResponse> = response
+            .json()
+            .await
+            .map_err(|err| AppError::Api(format!("Invalid get response JSON: {err}")))?;
+        let row = rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::Api("Memo not found".to_string()))?;
+        row_to_recent_memo(row)
+    }
+
+    pub async fn update_memo(
+        &self,
+        access_token: &str,
+        memo_id: &str,
+        text: &str,
+        expected_version: &str,
+    ) -> Result<UpdateMemoOutcome, AppError> {
+        let next_version = increment_numeric_string(expected_version).ok_or_else(|| {
+            AppError::Api(format!(
+                "Memo update failed: invalid expected version `{expected_version}`"
+            ))
+        })?;
+        let updated_at = Utc::now().to_rfc3339();
+        let endpoint = format!(
+            "{}/rest/v1/memos?id=eq.{memo_id}&version=eq.{expected_version}",
+            self.base_url
+        );
+        let payload = UpdateMemoRequest {
+            text,
+            updated_at: &updated_at,
+            version: &next_version,
+        };
+        let response = self
+            .http
+            .patch(endpoint)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("Prefer", "return=representation")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| AppError::Network(format!("Supabase update request failed: {err}")))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = read_error_body(response).await;
+            let message = format!("Update memo failed ({status}): {body}");
+            if status == StatusCode::UNAUTHORIZED {
+                return Err(AppError::Auth(message));
+            }
+            return Err(AppError::Api(message));
+        }
+
+        let rows: Vec<MemoRowResponse> = response
+            .json()
+            .await
+            .map_err(|err| AppError::Api(format!("Invalid update response JSON: {err}")))?;
+        let Some(row) = rows.into_iter().next() else {
+            return Ok(UpdateMemoOutcome::Conflict);
+        };
+
+        Ok(UpdateMemoOutcome::Updated(row_to_recent_memo(row)?))
+    }
+
+    pub async fn delete_memo(
+        &self,
+        access_token: &str,
+        memo_id: &str,
+        expected_version: &str,
+    ) -> Result<DeleteMemoOutcome, AppError> {
+        let next_version = increment_numeric_string(expected_version).ok_or_else(|| {
+            AppError::Api(format!(
+                "Memo delete failed: invalid expected version `{expected_version}`"
+            ))
+        })?;
+        let deleted_at = Utc::now().to_rfc3339();
+        let payload = DeleteMemoRequest {
+            deleted_at: &deleted_at,
+            updated_at: &deleted_at,
+            version: &next_version,
+        };
+        let endpoint = format!(
+            "{}/rest/v1/memos?id=eq.{memo_id}&version=eq.{expected_version}",
+            self.base_url
+        );
+        let response = self
+            .http
+            .patch(endpoint)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("Prefer", "return=representation")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| AppError::Network(format!("Supabase delete request failed: {err}")))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = read_error_body(response).await;
+            let message = format!("Delete memo failed ({status}): {body}");
+            if status == StatusCode::UNAUTHORIZED {
+                return Err(AppError::Auth(message));
+            }
+            return Err(AppError::Api(message));
+        }
+
+        let rows: Vec<MemoRowResponse> = response
+            .json()
+            .await
+            .map_err(|err| AppError::Api(format!("Invalid delete response JSON: {err}")))?;
+        if rows.is_empty() {
+            return Ok(DeleteMemoOutcome::Conflict);
+        }
+
+        Ok(DeleteMemoOutcome::Deleted)
     }
 }
 
@@ -285,14 +479,72 @@ fn extract_user_id_from_jwt(access_token: &str) -> Result<String, AppError> {
     Ok(sub.to_string())
 }
 
+fn row_to_recent_memo(row: MemoRowResponse) -> Result<RecentMemo, AppError> {
+    Ok(RecentMemo {
+        id: row.id,
+        text: row.text,
+        created_at: row.created_at,
+        version: normalize_version_value(&row.version)?,
+        deleted_at: row.deleted_at,
+    })
+}
+
+fn normalize_version_value(value: &serde_json::Value) -> Result<String, AppError> {
+    match value {
+        serde_json::Value::String(v) if !v.trim().is_empty() => Ok(v.trim().to_string()),
+        serde_json::Value::Number(v) => Ok(v.to_string()),
+        _ => Err(AppError::Api(
+            "Memo version is missing or invalid".to_string(),
+        )),
+    }
+}
+
+fn increment_numeric_string(value: &str) -> Option<String> {
+    if value.is_empty() || !value.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+
+    let mut digits: Vec<u8> = value.bytes().collect();
+    let mut carry = 1_u8;
+
+    for idx in (0..digits.len()).rev() {
+        let raw = digits[idx];
+        if !raw.is_ascii_digit() {
+            return None;
+        }
+        let n = (raw - b'0') + carry;
+        if n >= 10 {
+            digits[idx] = b'0';
+            carry = 1;
+        } else {
+            digits[idx] = b'0' + n;
+            carry = 0;
+            break;
+        }
+    }
+
+    if carry == 1 {
+        digits.insert(0, b'1');
+    }
+
+    String::from_utf8(digits).ok()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::extract_user_id_from_jwt;
+    use super::{extract_user_id_from_jwt, increment_numeric_string};
 
     #[test]
     fn extract_sub_from_jwt_payload() {
         let token = "a.eyJzdWIiOiIxMjM0In0.b";
         let user_id = extract_user_id_from_jwt(token).expect("should parse sub");
         assert_eq!(user_id, "1234");
+    }
+
+    #[test]
+    fn increment_numeric_string_handles_carry() {
+        assert_eq!(increment_numeric_string("1"), Some("2".to_string()));
+        assert_eq!(increment_numeric_string("9"), Some("10".to_string()));
+        assert_eq!(increment_numeric_string("099"), Some("100".to_string()));
     }
 }

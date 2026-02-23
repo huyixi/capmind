@@ -305,17 +305,16 @@ mod tests {
     #[test]
     fn ctrl_s_submits() {
         let mut composer = Composer::new();
-        let action = composer.handle_key_event(KeyEvent::new(
-            KeyCode::Char('s'),
-            KeyModifiers::CONTROL,
-        ));
+        let action =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
         assert_eq!(action, ComposerAction::Submit);
     }
 
     #[test]
     fn ctrl_enter_submits() {
         let mut composer = Composer::new();
-        let action = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+        let action =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
         assert_eq!(action, ComposerAction::Submit);
     }
 

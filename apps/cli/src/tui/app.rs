@@ -14,7 +14,7 @@ use crate::auth::authenticate_with_stored_token;
 use crate::cli::resolve_text;
 use crate::error::AppError;
 use crate::submission::submit_memo;
-use crate::supabase::{RecentMemo, SupabaseClient};
+use crate::supabase::{DeleteMemoOutcome, RecentMemo, SupabaseClient, UpdateMemoOutcome};
 
 use super::chat_widget::{ChatWidget, WidgetAction};
 use super::render;
@@ -65,8 +65,22 @@ impl<'a> ComposeApp<'a> {
             match self.widget.handle_key_event(key_event) {
                 WidgetAction::None => {}
                 WidgetAction::Quit => break,
-                WidgetAction::Submit(text) => {
-                    self.handle_submit(text).await;
+                WidgetAction::SubmitCreate(text) => {
+                    self.handle_submit_create(text).await;
+                }
+                WidgetAction::SubmitEdit {
+                    memo_id,
+                    expected_version,
+                    text,
+                } => {
+                    self.handle_submit_edit(memo_id, expected_version, text)
+                        .await;
+                }
+                WidgetAction::DeleteMemo {
+                    memo_id,
+                    expected_version,
+                } => {
+                    self.handle_delete_memo(memo_id, expected_version).await;
                 }
             }
         }
@@ -102,7 +116,7 @@ impl<'a> ComposeApp<'a> {
         }
     }
 
-    async fn handle_submit(&mut self, text: String) {
+    async fn handle_submit_create(&mut self, text: String) {
         let normalized = match resolve_text(Some(text.clone())) {
             Ok(value) => value,
             Err(err) => {
@@ -117,11 +131,107 @@ impl<'a> ComposeApp<'a> {
                     &normalized,
                     &result.inserted.id,
                     &result.inserted.created_at,
+                    &result.inserted.version,
                 );
             }
             Err(err) => {
                 self.widget.on_submit_error(&normalized, &err.to_string());
             }
+        }
+    }
+
+    async fn handle_submit_edit(
+        &mut self,
+        memo_id: String,
+        expected_version: String,
+        text: String,
+    ) {
+        let normalized = match resolve_text(Some(text.clone())) {
+            Ok(value) => value,
+            Err(err) => {
+                self.widget.on_validation_error(&err.to_string());
+                return;
+            }
+        };
+
+        let session = match authenticate_with_stored_token(self.client).await {
+            Ok(session) => session,
+            Err(err) => {
+                self.widget.on_submit_error(&normalized, &err.to_string());
+                return;
+            }
+        };
+
+        match self
+            .client
+            .update_memo(
+                &session.access_token,
+                &memo_id,
+                &normalized,
+                &expected_version,
+            )
+            .await
+        {
+            Ok(UpdateMemoOutcome::Updated(updated_memo)) => {
+                self.widget.on_edit_success(&updated_memo);
+            }
+            Ok(UpdateMemoOutcome::Conflict) => {
+                let server_memo = match self
+                    .client
+                    .get_memo_by_id(&session.access_token, &memo_id)
+                    .await
+                {
+                    Ok(memo) => memo,
+                    Err(err) => {
+                        self.widget.on_submit_error(&normalized, &err.to_string());
+                        return;
+                    }
+                };
+
+                match self
+                    .client
+                    .insert_memo(&session.access_token, &normalized)
+                    .await
+                {
+                    Ok(forked) => {
+                        self.widget
+                            .on_edit_conflict(&server_memo, &normalized, &forked);
+                    }
+                    Err(err) => self.widget.on_submit_error(&normalized, &err.to_string()),
+                }
+            }
+            Err(err) => {
+                self.widget.on_submit_error(&normalized, &err.to_string());
+            }
+        }
+    }
+
+    async fn handle_delete_memo(&mut self, memo_id: String, expected_version: String) {
+        let session = match authenticate_with_stored_token(self.client).await {
+            Ok(session) => session,
+            Err(err) => {
+                self.widget.on_delete_error(&err.to_string());
+                return;
+            }
+        };
+
+        match self
+            .client
+            .delete_memo(&session.access_token, &memo_id, &expected_version)
+            .await
+        {
+            Ok(DeleteMemoOutcome::Deleted) => self.widget.on_delete_success(&memo_id),
+            Ok(DeleteMemoOutcome::Conflict) => {
+                match self
+                    .client
+                    .get_memo_by_id(&session.access_token, &memo_id)
+                    .await
+                {
+                    Ok(server_memo) => self.widget.on_delete_conflict(&server_memo),
+                    Err(err) => self.widget.on_delete_error(&err.to_string()),
+                }
+            }
+            Err(err) => self.widget.on_delete_error(&err.to_string()),
         }
     }
 }

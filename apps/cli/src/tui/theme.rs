@@ -130,11 +130,19 @@ mod tests {
 
     #[test]
     fn composer_bg_is_fixed_hex_41454c() {
-        let light = build_ui_theme(TerminalPalette { bg: (255, 255, 255) });
+        let light = build_ui_theme(TerminalPalette {
+            bg: (255, 255, 255),
+        });
         let dark = build_ui_theme(TerminalPalette { bg: (0, 0, 0) });
 
-        assert_eq!(light.composer.normal_bg, ratatui::style::Color::Rgb(65, 69, 76));
-        assert_eq!(dark.composer.normal_bg, ratatui::style::Color::Rgb(65, 69, 76));
+        assert_eq!(
+            light.composer.normal_bg,
+            ratatui::style::Color::Rgb(65, 69, 76)
+        );
+        assert_eq!(
+            dark.composer.normal_bg,
+            ratatui::style::Color::Rgb(65, 69, 76)
+        );
     }
 
     #[test]

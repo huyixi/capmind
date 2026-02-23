@@ -1,7 +1,7 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
 use super::chat_widget::ChatWidget;
 use super::theme::{PaneColors, UiTheme};
@@ -13,6 +13,8 @@ const COMPOSER_INNER_PADDING_X: u16 = 0;
 const COMPOSER_INNER_PADDING_TOP: u16 = 1;
 const COMPOSER_INNER_PADDING_BOTTOM: u16 = 1;
 const COMPOSER_PLACEHOLDER: &str = "What's on your mind?";
+const COMPOSER_EDIT_PLACEHOLDER: &str = "Editing selected memo...";
+const COMPOSER_QUIT_CONFIRM_PLACEHOLDER: &str = "Press Esc again to quit";
 
 pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget, theme: &UiTheme) {
     let area = frame.area();
@@ -24,6 +26,7 @@ pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget, theme: &UiTheme) {
 
     render_history(frame, layout.history, widget, &theme.composer);
     render_composer(frame, layout.composer, layout.composer_input, widget);
+    render_delete_confirmation(frame, area, widget.delete_confirmation_text());
 }
 
 fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget, colors: &PaneColors) {
@@ -74,12 +77,7 @@ fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget, colors
     frame.render_stateful_widget(list, content_area, &mut state);
 }
 
-fn render_composer(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    input_area: Rect,
-    widget: &mut ChatWidget,
-) {
+fn render_composer(frame: &mut Frame<'_>, area: Rect, input_area: Rect, widget: &mut ChatWidget) {
     if area.height == 0 || area.width == 0 || input_area.height == 0 || input_area.width == 0 {
         return;
     }
@@ -90,11 +88,16 @@ fn render_composer(
 
     frame.render_widget(Block::default().style(block_style), area);
 
+    let is_editing_memo = widget.is_editing_memo();
+    let quit_confirmation_pending = widget.quit_confirmation_pending();
     let composer = widget.bottom_pane_mut().composer_mut();
     composer.ensure_cursor_visible(input_area.height);
     let text = composer.lines().join("\n");
-    let (display_text, is_placeholder) = composer_display_text(&text);
-    let cursor_row = composer.cursor_row().saturating_sub(composer.scroll_y() as usize) as u16;
+    let (display_text, is_placeholder) =
+        composer_display_text(&text, is_editing_memo, quit_confirmation_pending);
+    let cursor_row = composer
+        .cursor_row()
+        .saturating_sub(composer.scroll_y() as usize) as u16;
     let raw_cursor_col = composer.cursor_col() as u16;
     let horizontal_scroll = raw_cursor_col.saturating_sub(input_area.width.saturating_sub(1));
     let paragraph_style = if is_placeholder {
@@ -121,12 +124,68 @@ fn render_composer(
     }
 }
 
-fn composer_display_text(text: &str) -> (String, bool) {
+fn composer_display_text(
+    text: &str,
+    is_editing_memo: bool,
+    quit_confirmation_pending: bool,
+) -> (String, bool) {
     if text.is_empty() {
-        (COMPOSER_PLACEHOLDER.to_string(), true)
+        if quit_confirmation_pending {
+            (COMPOSER_QUIT_CONFIRM_PLACEHOLDER.to_string(), true)
+        } else if is_editing_memo {
+            (COMPOSER_EDIT_PLACEHOLDER.to_string(), true)
+        } else {
+            (COMPOSER_PLACEHOLDER.to_string(), true)
+        }
     } else {
         (text.to_string(), false)
     }
+}
+
+fn render_delete_confirmation(frame: &mut Frame<'_>, area: Rect, preview: Option<&str>) {
+    let Some(preview) = preview else {
+        return;
+    };
+    if area.width < 24 || area.height < 6 {
+        return;
+    }
+
+    let popup_width = area.width.min(72);
+    let popup_height = 6;
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
+        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    let preview_single_line = preview.replace('\n', " ");
+    let max_preview_chars = popup_width.saturating_sub(6) as usize;
+    let preview_display = truncate_for_popup(&preview_single_line, max_preview_chars);
+    let content =
+        format!("Delete selected memo?\n\"{preview_display}\"\nEnter/Y/D confirm | Esc/N cancel");
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(content)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Confirm Delete"),
+            )
+            .style(Style::default().fg(Color::Reset).bg(Color::Reset))
+            .wrap(Wrap { trim: true }),
+        popup,
+    );
+}
+
+fn truncate_for_popup(input: &str, limit: usize) -> String {
+    if input.chars().count() <= limit {
+        return input.to_string();
+    }
+    let keep = limit.saturating_sub(3);
+    let truncated: String = input.chars().take(keep).collect();
+    format!("{truncated}...")
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -226,15 +285,29 @@ mod tests {
 
     #[test]
     fn composer_display_text_uses_placeholder_when_empty() {
-        let (text, is_placeholder) = composer_display_text("");
+        let (text, is_placeholder) = composer_display_text("", false, false);
         assert_eq!(text, "What's on your mind?");
         assert!(is_placeholder);
     }
 
     #[test]
     fn composer_display_text_uses_input_when_non_empty() {
-        let (text, is_placeholder) = composer_display_text("hello");
+        let (text, is_placeholder) = composer_display_text("hello", false, false);
         assert_eq!(text, "hello");
         assert!(!is_placeholder);
+    }
+
+    #[test]
+    fn composer_display_text_uses_edit_placeholder_in_edit_mode() {
+        let (text, is_placeholder) = composer_display_text("", true, false);
+        assert_eq!(text, "Editing selected memo...");
+        assert!(is_placeholder);
+    }
+
+    #[test]
+    fn composer_display_text_uses_quit_confirm_placeholder_when_pending() {
+        let (text, is_placeholder) = composer_display_text("", false, true);
+        assert_eq!(text, "Press Esc again to quit");
+        assert!(is_placeholder);
     }
 }

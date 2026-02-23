@@ -47,10 +47,20 @@ TUI keys:
 - `Shift+Enter`: submit memo
 - `Ctrl+S`: submit memo (fallback for terminals that don't emit `Ctrl+Enter`)
 - `Tab`: switch focus between Composer (top) and History (bottom) panes
-- `Esc` / `Ctrl+C`: quit TUI
+- `Enter` (in History): load selected memo into Composer for edit mode
+- `q` (in History): quit TUI
+- `Esc`: press twice to quit TUI (with confirmation)
+- `Ctrl+C`: quit TUI immediately
+- `d` (in History): open delete confirmation for selected memo
+- `Enter` / `y` / `d` (in delete confirmation): confirm delete
+- `n` / `Esc` (in delete confirmation): cancel delete
 
-TUI history keeps the latest 3 entries.
+TUI history keeps up to the latest 100 entries.
 Latest memos are loaded into history in the background after startup (non-blocking).
+Submitting from History edit mode updates the original memo by version.
+On version conflict, CLI follows Web behavior: keep server-latest memo and fork your edits into a new memo.
+Deleting from History is a soft delete (`deleted_at` + version bump), aligned with Web behavior.
+On delete conflict, CLI refreshes that memo from server state instead of hard-removing it.
 
 ### 2) Login (interactive, one-time)
 
