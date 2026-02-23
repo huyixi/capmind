@@ -16,17 +16,22 @@ use crate::supabase::SupabaseClient;
 
 use super::chat_widget::{ChatWidget, WidgetAction};
 use super::render;
+use super::theme::{UiTheme, build_ui_theme, detect_terminal_palette};
 
 pub struct ComposeApp<'a> {
     client: &'a SupabaseClient,
     widget: ChatWidget,
+    theme: UiTheme,
 }
 
 impl<'a> ComposeApp<'a> {
     pub fn new(client: &'a SupabaseClient) -> Self {
+        let palette = detect_terminal_palette();
+        let theme = build_ui_theme(palette);
         Self {
             client,
             widget: ChatWidget::new(),
+            theme,
         }
     }
 
@@ -34,7 +39,7 @@ impl<'a> ComposeApp<'a> {
         let mut terminal = TerminalSession::new()?;
 
         loop {
-            terminal.draw(&mut self.widget)?;
+            terminal.draw(&mut self.widget, &self.theme)?;
 
             let has_event = event::poll(Duration::from_millis(120))
                 .map_err(|err| AppError::InvalidInput(format!("TUI poll failed: {err}")))?;
@@ -53,7 +58,7 @@ impl<'a> ComposeApp<'a> {
                 WidgetAction::Quit => break,
                 WidgetAction::Submit(text) => {
                     self.widget.set_submitting();
-                    terminal.draw(&mut self.widget)?;
+                    terminal.draw(&mut self.widget, &self.theme)?;
                     self.handle_submit(text).await;
                 }
             }
@@ -109,9 +114,9 @@ impl TerminalSession {
         Ok(Self { terminal })
     }
 
-    fn draw(&mut self, widget: &mut ChatWidget) -> Result<(), AppError> {
+    fn draw(&mut self, widget: &mut ChatWidget, theme: &UiTheme) -> Result<(), AppError> {
         self.terminal
-            .draw(|frame| render::draw(frame, widget))
+            .draw(|frame| render::draw(frame, widget, theme))
             .map_err(|err| AppError::InvalidInput(format!("TUI draw failed: {err}")))?;
         Ok(())
     }

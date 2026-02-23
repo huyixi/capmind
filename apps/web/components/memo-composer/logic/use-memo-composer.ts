@@ -172,7 +172,7 @@ export function useMemoComposer({
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
       if (event.key !== "Enter") return;
       if (event.nativeEvent.isComposing) return;
-      if (event.metaKey || event.ctrlKey) {
+      if (event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
         event.preventDefault();
         handleSubmit();
         return;

@@ -94,17 +94,22 @@ impl Composer {
 
         match key_event {
             KeyEvent {
-                code: KeyCode::Enter,
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::CONTROL) => ComposerAction::Submit,
-            KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
                 ..
             } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'s') => {
                 ComposerAction::Submit
             }
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => ComposerAction::Submit,
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::SHIFT => ComposerAction::Submit,
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => ComposerAction::Cancel,
@@ -291,10 +296,26 @@ mod tests {
     }
 
     #[test]
+    fn shift_enter_submits() {
+        let mut composer = Composer::new();
+        let action = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        assert_eq!(action, ComposerAction::Submit);
+    }
+
+    #[test]
     fn ctrl_s_submits() {
         let mut composer = Composer::new();
-        let action =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        let action = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(action, ComposerAction::Submit);
+    }
+
+    #[test]
+    fn ctrl_enter_submits() {
+        let mut composer = Composer::new();
+        let action = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
         assert_eq!(action, ComposerAction::Submit);
     }
 
