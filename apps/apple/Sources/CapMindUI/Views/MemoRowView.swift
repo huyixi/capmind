@@ -17,8 +17,8 @@ public struct MemoRowView: View {
             HStack(spacing: 8) {
                 Text(memo.createdAt, style: .date)
                 Text(memo.updatedAt, style: .time)
-                if !memo.images.isEmpty {
-                    Text("\(memo.images.count) images")
+                if memo.hasImages {
+                    Text("\(max(memo.imageCount, memo.images.count)) images")
                 }
                 Spacer()
                 Text("v\(memo.version)")

@@ -62,6 +62,19 @@ public final class ComposerViewModel: ObservableObject {
         state.imageReferences = refs
     }
 
+    public func appendImageReference(_ reference: String) {
+        let normalized = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return }
+        if state.imageReferences.contains(normalized) {
+            return
+        }
+        state.imageReferences.append(normalized)
+    }
+
+    public func removeImageReference(_ reference: String) {
+        state.imageReferences.removeAll { $0 == reference }
+    }
+
     public func submit(userID: String) async -> MemoEntity? {
         state.errorMessage = nil
         let text = state.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -84,6 +97,7 @@ public final class ComposerViewModel: ObservableObject {
 
     private func submitCreate(userID: String, text: String) async -> MemoEntity? {
         let now = Date()
+        let imageSplit = splitImageReferences(state.imageReferences)
 
         if !onlineProvider.isOnline {
             let localID = "local-\(UUID().uuidString.lowercased())"
@@ -93,7 +107,8 @@ public final class ComposerViewModel: ObservableObject {
                         type: .create,
                         clientID: localID,
                         text: text,
-                        localImageReferences: state.imageReferences,
+                        localImageReferences: imageSplit.local,
+                        imagePaths: imageSplit.remote,
                         expectedVersion: "0",
                         createdAt: now,
                         updatedAt: now
@@ -120,10 +135,11 @@ public final class ComposerViewModel: ObservableObject {
         }
 
         do {
-            let imagePaths = try await imageRepository.uploadImages(
+            let uploaded = try await imageRepository.uploadImages(
                 userID: userID,
-                localReferences: state.imageReferences
+                localReferences: imageSplit.local
             )
+            let imagePaths = imageSplit.remote + uploaded
             return try await memoRepository.createMemo(
                 userID: userID,
                 text: text,
@@ -146,8 +162,9 @@ public final class ComposerViewModel: ObservableObject {
 
         let now = Date()
         let refs = state.imageReferences
-        let localRefs = refs.filter { !$0.contains("://") }
-        let remoteRefs = refs.filter { $0.contains("://") }
+        let split = splitImageReferences(refs)
+        let localRefs = split.local
+        let remoteRefs = split.remote
 
         if !onlineProvider.isOnline {
             do {
@@ -184,13 +201,17 @@ public final class ComposerViewModel: ObservableObject {
                 localReferences: localRefs
             )
             let mergedPaths = remoteRefs + uploaded
+            let shouldKeepExistingImages =
+                mergedPaths.isEmpty &&
+                editing.hasImages &&
+                editing.imageCount > 0
 
             return try await memoRepository.updateMemo(
                 id: editing.id,
                 userID: userID,
                 text: text,
                 expectedVersion: editing.version,
-                imagePaths: mergedPaths
+                imagePaths: shouldKeepExistingImages ? nil : mergedPaths
             )
         } catch let error as CapMindError {
             if case .conflict(let serverMemo) = error {
@@ -203,5 +224,33 @@ public final class ComposerViewModel: ObservableObject {
             state.errorMessage = "Failed to update memo"
             return nil
         }
+    }
+
+    private func splitImageReferences(_ refs: [String]) -> (local: [String], remote: [String]) {
+        var local: [String] = []
+        var remote: [String] = []
+
+        for ref in refs {
+            let normalized = ref.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty else { continue }
+            if isLocalImageReference(normalized) {
+                local.append(normalized)
+            } else {
+                remote.append(normalized)
+            }
+        }
+
+        return (local: local, remote: remote)
+    }
+
+    private func isLocalImageReference(_ reference: String) -> Bool {
+        if let url = URL(string: reference), let scheme = url.scheme?.lowercased() {
+            if url.isFileURL {
+                return true
+            }
+            return scheme != "http" && scheme != "https"
+        }
+
+        return reference.hasPrefix("/") || reference.hasPrefix("~")
     }
 }

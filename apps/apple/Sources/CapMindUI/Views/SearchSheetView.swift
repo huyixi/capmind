@@ -10,13 +10,46 @@ public struct SearchSheetView: View {
 
     public var body: some View {
         NavigationStack {
-            List(viewModel.state.results) { memo in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(memo.text)
-                        .lineLimit(3)
-                    Text(memo.createdAt, style: .date)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            List {
+                if viewModel.state.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if viewModel.state.recentQueries.isEmpty {
+                        ContentUnavailableView(
+                            "Start typing to search",
+                            systemImage: "magnifyingglass"
+                        )
+                    } else {
+                        Section("Recent searches") {
+                            ForEach(viewModel.state.recentQueries, id: \.self) { query in
+                                HStack(spacing: 8) {
+                                    Button {
+                                        Task { await viewModel.applyRecentQuery(query) }
+                                    } label: {
+                                        Label(query, systemImage: "clock")
+                                            .foregroundStyle(.primary)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    Button(role: .destructive) {
+                                        viewModel.removeRecentQuery(query)
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    ForEach(viewModel.state.results) { memo in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(memo.text)
+                                .lineLimit(3)
+                            Text(memo.createdAt, style: .date)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
             .overlay {
@@ -34,12 +67,22 @@ public struct SearchSheetView: View {
                 placement: .automatic,
                 prompt: "Search memos"
             )
+            .onSubmit(of: .search) {
+                viewModel.commitCurrentQuery()
+            }
             .navigationTitle("Search")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
                         viewModel.close()
                     }
+                }
+
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Clear") {
+                        viewModel.clear()
+                    }
+                    .disabled(viewModel.state.query.isEmpty)
                 }
             }
             .safeAreaInset(edge: .bottom) {

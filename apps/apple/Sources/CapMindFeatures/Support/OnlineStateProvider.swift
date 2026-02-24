@@ -3,12 +3,25 @@ import Foundation
 import Network
 #endif
 
+public extension Notification.Name {
+    static let capMindOnlineStateDidChange = Notification.Name("capmind.online-state.did-change")
+}
+
 public protocol OnlineStateProviding: AnyObject {
     var isOnline: Bool { get }
 }
 
 public final class MutableOnlineStateProvider: OnlineStateProviding {
-    public var isOnline: Bool
+    public var isOnline: Bool {
+        didSet {
+            guard oldValue != isOnline else { return }
+            NotificationCenter.default.post(
+                name: .capMindOnlineStateDidChange,
+                object: self,
+                userInfo: ["isOnline": isOnline]
+            )
+        }
+    }
 
     public init(isOnline: Bool = true) {
         self.isOnline = isOnline
@@ -24,7 +37,17 @@ public final class DefaultOnlineStateProvider: ObservableObject, OnlineStateProv
 
     public init() {
         monitor.pathUpdateHandler = { [weak self] path in
-            self?.isOnline = path.status == .satisfied
+            let next = path.status == .satisfied
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard self.isOnline != next else { return }
+                self.isOnline = next
+                NotificationCenter.default.post(
+                    name: .capMindOnlineStateDidChange,
+                    object: self,
+                    userInfo: ["isOnline": next]
+                )
+            }
         }
         monitor.start(queue: queue)
     }

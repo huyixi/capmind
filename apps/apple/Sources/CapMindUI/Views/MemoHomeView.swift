@@ -1,8 +1,10 @@
 import SwiftUI
+import Combine
 import CapMindCore
 import CapMindFeatures
 
 public struct MemoHomeView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var authViewModel: AuthViewModel
     @ObservedObject private var listViewModel: MemoListViewModel
     @ObservedObject private var composerViewModel: ComposerViewModel
@@ -66,11 +68,12 @@ public struct MemoHomeView: View {
                     Button("Search") {
                         searchViewModel.open()
                     }
+                    .keyboardShortcut("k", modifiers: [.command])
                 }
 
                 ToolbarItemGroup(placement: .automatic) {
                     Button("Sync") {
-                        Task { _ = await listViewModel.syncNow() }
+                        Task { await listViewModel.syncAndReloadIfNeeded() }
                     }
 
                     Button("Refresh") {
@@ -95,13 +98,24 @@ public struct MemoHomeView: View {
                         .clipShape(Circle())
                         .shadow(radius: 3)
                 }
+                .keyboardShortcut("n", modifiers: [.command])
                 .padding(.trailing, 20)
                 .padding(.bottom, 12)
             }
             .task(id: authViewModel.state.session?.userID) {
                 if let session = authViewModel.state.session {
                     await listViewModel.loadInitial(userID: session.userID)
+                    await listViewModel.syncAndReloadIfNeeded()
                 }
+            }
+            .onChange(of: scenePhase) { _, nextPhase in
+                guard nextPhase == .active else { return }
+                Task { await listViewModel.syncAndReloadIfNeeded() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .capMindOnlineStateDidChange)) { notification in
+                let isOnline = notification.userInfo?["isOnline"] as? Bool ?? false
+                guard isOnline else { return }
+                Task { await listViewModel.syncAndReloadIfNeeded() }
             }
             .sheet(isPresented: Binding(
                 get: { composerViewModel.state.isPresented },

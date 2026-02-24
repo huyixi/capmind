@@ -100,8 +100,20 @@ public final class MemoListViewModel: ObservableObject {
         let result = await syncEngine.flushOutbox(userID: userID)
         if result.hadError {
             state.errorMessage = "Sync failed. Pending items will retry later."
+        } else if result.conflictCount > 0 {
+            state.errorMessage = "Sync completed with conflicts. Conflicting edits were saved as new memos."
+        } else {
+            state.errorMessage = nil
         }
         return result
+    }
+
+    public func syncAndReloadIfNeeded() async {
+        guard let userID else { return }
+        let result = await syncNow()
+        if result.didSync || result.conflictCount > 0 {
+            await loadInitial(userID: userID)
+        }
     }
 
     public func upsertMemo(_ memo: MemoEntity) {

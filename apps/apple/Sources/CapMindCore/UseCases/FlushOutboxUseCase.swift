@@ -40,10 +40,11 @@ public struct FlushOutboxUseCase {
 
                     var imagePaths = item.imagePaths
                     if !item.localImageReferences.isEmpty {
-                        imagePaths = try await imageRepository.uploadImages(
+                        let uploaded = try await imageRepository.uploadImages(
                             userID: userID,
                             localReferences: item.localImageReferences
                         )
+                        imagePaths.append(contentsOf: uploaded)
                     }
 
                     _ = try await memoRepository.createMemo(
@@ -68,13 +69,44 @@ public struct FlushOutboxUseCase {
                         continue
                     }
 
-                    _ = try await memoRepository.updateMemo(
-                        id: memoID,
-                        userID: userID,
-                        text: text,
-                        expectedVersion: MemoVersion.normalizeExpected(item.expectedVersion),
-                        imagePaths: item.imagePaths.isEmpty ? nil : item.imagePaths
-                    )
+                    let expectedVersion = MemoVersion.normalizeExpected(item.expectedVersion)
+                    var imagePaths = item.imagePaths
+                    if !item.localImageReferences.isEmpty {
+                        let uploaded = try await imageRepository.uploadImages(
+                            userID: userID,
+                            localReferences: item.localImageReferences
+                        )
+                        imagePaths.append(contentsOf: uploaded)
+                    }
+
+                    do {
+                        _ = try await memoRepository.updateMemo(
+                            id: memoID,
+                            userID: userID,
+                            text: text,
+                            expectedVersion: expectedVersion,
+                            imagePaths: imagePaths.isEmpty ? nil : imagePaths
+                        )
+                    } catch let error as CapMindError {
+                        guard case .conflict(let serverMemo) = error else {
+                            throw error
+                        }
+
+                        _ = try await resolveServerMemoForConflict(
+                            memoID: memoID,
+                            userID: userID,
+                            fallback: serverMemo
+                        )
+                        _ = try await memoRepository.createMemo(
+                            userID: userID,
+                            text: text,
+                            imagePaths: imagePaths,
+                            createdAt: item.createdAt,
+                            updatedAt: item.updatedAt,
+                            clientID: nil
+                        )
+                        conflictCount += 1
+                    }
 
                     try await outboxRepository.remove(id: item.id)
                     didSync = true
@@ -152,5 +184,16 @@ public struct FlushOutboxUseCase {
             conflictCount: conflictCount,
             processedCount: processedCount
         )
+    }
+
+    private func resolveServerMemoForConflict(
+        memoID: String,
+        userID: String,
+        fallback: MemoEntity?
+    ) async throws -> MemoEntity? {
+        if let fallback {
+            return fallback
+        }
+        return try await memoRepository.fetchMemo(id: memoID, userID: userID)
     }
 }

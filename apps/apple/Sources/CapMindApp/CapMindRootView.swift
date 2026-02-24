@@ -38,7 +38,11 @@ public struct CapMindRootView: View {
     }
 
     public static func defaultDependencies() -> CapMindDependencies {
-        let onlineProvider = MutableOnlineStateProvider(isOnline: true)
+        #if canImport(Network)
+        let onlineProvider: OnlineStateProviding = DefaultOnlineStateProvider()
+        #else
+        let onlineProvider: OnlineStateProviding = MutableOnlineStateProvider(isOnline: true)
+        #endif
         if let configuration = SupabaseConfiguration.fromEnvironment() {
             return .supabaseLive(
                 configuration: configuration,

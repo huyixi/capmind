@@ -84,6 +84,49 @@ final class FlushOutboxUseCaseTests: XCTestCase {
 
         let remaining = try await outbox.listOrdered()
         XCTAssertTrue(remaining.isEmpty)
+
+        let createCalls = await memo.createCalls
+        XCTAssertEqual(createCalls.count, 1)
+        XCTAssertEqual(createCalls.first?.text, "world")
+    }
+
+    func testRunUpdateMergesRemoteAndUploadedImagePaths() async throws {
+        let outbox = MockOutboxRepository()
+        let memo = MockMemoRepository()
+        let image = MockImageRepository()
+
+        _ = try await outbox.enqueue(
+            OutboxDraft(
+                type: .update,
+                memoID: "memo-1",
+                text: "new value",
+                localImageReferences: ["/tmp/local-a.png"],
+                imagePaths: ["public/memo-images/u1/existing-a.png"],
+                expectedVersion: "1",
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+        )
+
+        let useCase = FlushOutboxUseCase(
+            memoRepository: memo,
+            outboxRepository: outbox,
+            imageRepository: image
+        )
+
+        let result = await useCase.run(userID: "user-1")
+
+        XCTAssertTrue(result.didSync)
+        XCTAssertFalse(result.hadError)
+        XCTAssertEqual(result.conflictCount, 0)
+        XCTAssertEqual(result.processedCount, 1)
+
+        let updateCalls = await memo.updateCalls
+        XCTAssertEqual(updateCalls.count, 1)
+        XCTAssertEqual(
+            updateCalls.first?.imagePaths ?? [],
+            ["public/memo-images/u1/existing-a.png", "uploaded://user-1/0"]
+        )
     }
 }
 
@@ -138,7 +181,15 @@ private actor MockMemoRepository: MemoRepository {
         let images: [String]
     }
 
+    struct UpdateCall {
+        let id: String
+        let userID: String
+        let text: String
+        let imagePaths: [String]
+    }
+
     var createCalls: [CreateCall] = []
+    var updateCalls: [UpdateCall] = []
     private var conflictOnUpdate = false
 
     func setConflictOnUpdate(_ value: Bool) {
@@ -168,6 +219,14 @@ private actor MockMemoRepository: MemoRepository {
     }
 
     func updateMemo(id: String, userID: String, text: String, expectedVersion: String, imagePaths: [String]?) async throws -> MemoEntity {
+        updateCalls.append(
+            UpdateCall(
+                id: id,
+                userID: userID,
+                text: text,
+                imagePaths: imagePaths ?? []
+            )
+        )
         if conflictOnUpdate {
             throw CapMindError.conflict(serverMemo: nil)
         }
