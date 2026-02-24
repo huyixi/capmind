@@ -40,6 +40,12 @@ The CLI auto-loads env files in this order (first found values are used):
 cargo run --
 ```
 
+Open list page directly:
+
+```bash
+cargo run -- list
+```
+
 TUI keys:
 
 - `Enter`: insert newline
@@ -51,7 +57,14 @@ TUI keys:
 - `Esc` in `NORMAL` (or outside Composer insert mode): press twice to quit TUI (with confirmation)
 - `NORMAL` mode navigation: `h`/`j`/`k`/`l`, `w`/`b`, `0`, `$`
 - `NORMAL` mode edit commands: `i`/`a`/`I`/`A`/`o`/`O`, `x`, `dd` (delete current line)
-- `Tab`: switch focus between Composer (top) and History (bottom) panes
+- `:` in Composer `NORMAL`: open Vim-like command mode
+  - `:w`: submit and stay
+  - `:q`: quit only if no unsaved changes
+  - `:wq`: submit in background (up to 3 attempts, retry delays `1s`, `3s`) and quit on success
+  - `:q!`: quit without submit
+  - `:splitlist`: toggle split composer+history layout
+  - `:l` / `:ls` / `:list`: open full-page memo list
+- `Tab`: switch focus between Composer and History panes (only when split layout is open)
 - `↑` / `k` (in History): move selection up
 - `↓` / `j` (in History): move selection down
 - `Enter` (in History): load selected memo into Composer for edit mode
@@ -61,8 +74,10 @@ TUI keys:
 - `d` (in History): open delete confirmation for selected memo
 - `Enter` / `y` / `d` (in delete confirmation): confirm delete
 - `n` / `Esc` (in delete confirmation): cancel delete
+- Memo list page: `j`/`k` or `↑`/`↓` move, `Enter` loads selected memo into composer, `d` opens delete confirmation, `q` or `Esc` returns to composer page
 
-Vim support is intentionally basic: no `:` command mode, counts (like `3w`), macros, or text objects.
+Composer page starts in single-pane mode (no history pane shown).
+Use `:splitlist` when you want to show the split composer/history layout.
 
 TUI history keeps up to the latest 100 entries.
 Latest memos are loaded into history in the background after startup (non-blocking).
@@ -70,6 +85,7 @@ Submitting from History edit mode updates the original memo by version.
 On version conflict, CLI follows Web behavior: keep server-latest memo and fork your edits into a new memo.
 Deleting from History is a soft delete (`deleted_at` + version bump), aligned with Web behavior.
 On delete conflict, CLI refreshes that memo from server state instead of hard-removing it.
+If `:wq` fails after the final retry, the UI prompts to either quit without submit or continue editing.
 
 ### 2) Login (interactive, one-time)
 

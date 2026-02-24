@@ -12,3 +12,7 @@ use crate::supabase::SupabaseClient;
 pub async fn run(client: &SupabaseClient) -> Result<(), AppError> {
     app::ComposeApp::new(client).run().await
 }
+
+pub async fn run_list(client: &SupabaseClient) -> Result<(), AppError> {
+    app::ComposeApp::new_list(client).run().await
+}

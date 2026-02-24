@@ -47,6 +47,9 @@ async fn run() -> Result<(), error::AppError> {
         Commands::Compose => {
             tui::run(&client).await?;
         }
+        Commands::List => {
+            tui::run_list(&client).await?;
+        }
     }
 
     Ok(())

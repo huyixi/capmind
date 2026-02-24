@@ -16,6 +16,10 @@ pub struct BottomPane {
 }
 
 impl BottomPane {
+    pub fn composer(&self) -> &Composer {
+        &self.composer
+    }
+
     pub fn composer_mut(&mut self) -> &mut Composer {
         &mut self.composer
     }

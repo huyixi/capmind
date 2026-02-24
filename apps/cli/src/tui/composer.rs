@@ -99,6 +99,11 @@ impl Composer {
         self.mode == VimMode::Insert
     }
 
+    pub fn switch_to_insert_mode(&mut self) {
+        self.mode = VimMode::Insert;
+        self.pending_delete_line = false;
+    }
+
     pub fn ensure_cursor_visible(&mut self, viewport_height: u16) {
         if viewport_height == 0 {
             return;
