@@ -2,13 +2,13 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
-use unicode_width::UnicodeWidthChar;
 
+use super::composer::VimMode;
 use super::chat_widget::ChatWidget;
 use super::theme::{PaneColors, UiTheme};
 use super::types::FocusArea;
 
-const HISTORY_FIXED_HEIGHT: u16 = 3;
+const HISTORY_FIXED_HEIGHT: u16 = 6;
 const COMPOSER_H_INSET: u16 = 0;
 const COMPOSER_INNER_PADDING_X: u16 = 0;
 const COMPOSER_INNER_PADDING_TOP: u16 = 1;
@@ -24,13 +24,25 @@ pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget, theme: &UiTheme) {
     }
 
     let layout = compute_layout(area);
+    let composer_mode = widget.bottom_pane_mut().composer_mut().vim_mode();
 
     render_history(frame, layout.history, widget, &theme.composer);
-    render_composer(frame, layout.composer, layout.composer_input, widget);
+    render_composer(
+        frame,
+        layout.composer,
+        layout.composer_input,
+        widget,
+        composer_mode,
+    );
     render_delete_confirmation(frame, area, widget.delete_confirmation_text());
 }
 
-fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget, colors: &PaneColors) {
+fn render_history(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    widget: &ChatWidget,
+    colors: &PaneColors,
+) {
     if area.height == 0 {
         return;
     }
@@ -83,7 +95,13 @@ fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget, colors
     frame.render_stateful_widget(list, content_area, &mut state);
 }
 
-fn render_composer(frame: &mut Frame<'_>, area: Rect, input_area: Rect, widget: &mut ChatWidget) {
+fn render_composer(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    input_area: Rect,
+    widget: &mut ChatWidget,
+    composer_mode: VimMode,
+) {
     if area.height == 0 || area.width == 0 || input_area.height == 0 || input_area.width == 0 {
         return;
     }
@@ -99,16 +117,10 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, input_area: Rect, widget: 
     let composer = widget.bottom_pane_mut().composer_mut();
     composer.ensure_cursor_visible(input_area.height);
     let text = composer.lines().join("\n");
-    let (display_text, is_placeholder) =
-        composer_display_text(&text, is_editing_memo, quit_confirmation_pending);
+    let (display_text, is_placeholder) = composer_display_text(&text, is_editing_memo);
     let cursor_row_abs = composer.cursor_row();
     let cursor_row = cursor_row_abs.saturating_sub(composer.scroll_y() as usize) as u16;
-    let current_line = composer
-        .lines()
-        .get(cursor_row_abs)
-        .map(String::as_str)
-        .unwrap_or("");
-    let raw_cursor_col = display_width_until_char(current_line, composer.cursor_col());
+    let raw_cursor_col = composer.cursor_display_col().min(u16::MAX as usize) as u16;
     let horizontal_scroll = calculate_horizontal_scroll(raw_cursor_col, input_area.width);
     let paragraph_style = if is_placeholder {
         text_style.add_modifier(Modifier::DIM)
@@ -119,6 +131,16 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, input_area: Rect, widget: 
         .style(paragraph_style)
         .scroll((composer.scroll_y(), horizontal_scroll));
     frame.render_widget(paragraph, input_area);
+    frame.render_widget(
+        Paragraph::new(mode_tip_text(composer_mode, quit_confirmation_pending))
+            .style(text_style.add_modifier(Modifier::DIM)),
+        Rect {
+            x: area.x,
+            y: area.y.saturating_add(area.height.saturating_sub(1)),
+            width: area.width,
+            height: 1,
+        },
+    );
 
     if focused {
         let row = cursor_row;
@@ -134,11 +156,14 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, input_area: Rect, widget: 
     }
 }
 
-fn display_width_until_char(input: &str, char_idx: usize) -> u16 {
-    let width = input.chars().take(char_idx).fold(0usize, |acc, c| {
-        acc.saturating_add(UnicodeWidthChar::width(c).unwrap_or(0))
-    });
-    width.min(u16::MAX as usize) as u16
+fn mode_tip_text(mode: VimMode, quit_confirmation_pending: bool) -> &'static str {
+    if quit_confirmation_pending {
+        COMPOSER_QUIT_CONFIRM_PLACEHOLDER
+    } else if mode == VimMode::Insert {
+        "Mode: INSERT"
+    } else {
+        "Mode: NORMAL"
+    }
 }
 
 fn calculate_horizontal_scroll(cursor_col: u16, viewport_width: u16) -> u16 {
@@ -148,12 +173,9 @@ fn calculate_horizontal_scroll(cursor_col: u16, viewport_width: u16) -> u16 {
 fn composer_display_text(
     text: &str,
     is_editing_memo: bool,
-    quit_confirmation_pending: bool,
 ) -> (String, bool) {
     if text.is_empty() {
-        if quit_confirmation_pending {
-            (COMPOSER_QUIT_CONFIRM_PLACEHOLDER.to_string(), true)
-        } else if is_editing_memo {
+        if is_editing_memo {
             (COMPOSER_EDIT_PLACEHOLDER.to_string(), true)
         } else {
             (COMPOSER_PLACEHOLDER.to_string(), true)
@@ -261,10 +283,8 @@ fn compute_layout(area: Rect) -> FloatingLayout {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        calculate_horizontal_scroll, composer_display_text, compute_layout,
-        display_width_until_char,
-    };
+    use super::{calculate_horizontal_scroll, composer_display_text, compute_layout, mode_tip_text};
+    use crate::tui::composer::VimMode;
     use ratatui::layout::Rect;
 
     #[test]
@@ -300,53 +320,46 @@ mod tests {
     }
 
     #[test]
-    fn compute_layout_keeps_history_to_three_rows_when_space_allows() {
+    fn compute_layout_keeps_history_to_six_rows_when_space_allows() {
         let area = Rect::new(0, 0, 100, 24);
         let layout = compute_layout(area);
-        assert_eq!(layout.history.height, 3);
-        assert_eq!(layout.composer.height, 21);
+        assert_eq!(layout.history.height, 6);
+        assert_eq!(layout.composer.height, 18);
     }
 
     #[test]
     fn composer_display_text_uses_placeholder_when_empty() {
-        let (text, is_placeholder) = composer_display_text("", false, false);
+        let (text, is_placeholder) = composer_display_text("", false);
         assert_eq!(text, "What's on your mind?");
         assert!(is_placeholder);
     }
 
     #[test]
     fn composer_display_text_uses_input_when_non_empty() {
-        let (text, is_placeholder) = composer_display_text("hello", false, false);
+        let (text, is_placeholder) = composer_display_text("hello", false);
         assert_eq!(text, "hello");
         assert!(!is_placeholder);
     }
 
     #[test]
     fn composer_display_text_uses_edit_placeholder_in_edit_mode() {
-        let (text, is_placeholder) = composer_display_text("", true, false);
+        let (text, is_placeholder) = composer_display_text("", true);
         assert_eq!(text, "Editing selected memo...");
         assert!(is_placeholder);
     }
 
     #[test]
-    fn composer_display_text_uses_quit_confirm_placeholder_when_pending() {
-        let (text, is_placeholder) = composer_display_text("", false, true);
-        assert_eq!(text, "Press Esc again to quit");
-        assert!(is_placeholder);
+    fn mode_tip_text_uses_quit_confirm_when_pending() {
+        assert_eq!(
+            mode_tip_text(VimMode::Insert, true),
+            "Press Esc again to quit"
+        );
     }
 
     #[test]
-    fn display_width_until_char_counts_cjk_as_double_width() {
-        let input = "你好";
-        assert_eq!(display_width_until_char(input, input.chars().count()), 4);
-    }
-
-    #[test]
-    fn display_width_until_char_handles_mixed_ascii_and_cjk() {
-        let input = "a你b";
-        assert_eq!(display_width_until_char(input, 1), 1);
-        assert_eq!(display_width_until_char(input, 2), 3);
-        assert_eq!(display_width_until_char(input, 3), 4);
+    fn mode_tip_text_matches_vim_modes() {
+        assert_eq!(mode_tip_text(VimMode::Insert, false), "Mode: INSERT");
+        assert_eq!(mode_tip_text(VimMode::Normal, false), "Mode: NORMAL");
     }
 
     #[test]
