@@ -1,6 +1,7 @@
 import SwiftUI
 import CapMindFeatures
 import CapMindUI
+import CapMindData
 
 public struct CapMindRootView: View {
     @StateObject private var authViewModel: AuthViewModel
@@ -8,7 +9,7 @@ public struct CapMindRootView: View {
     @StateObject private var composerViewModel: ComposerViewModel
     @StateObject private var searchViewModel: SearchViewModel
 
-    public init(dependencies: CapMindDependencies = .inMemoryDemo()) {
+    public init(dependencies: CapMindDependencies = CapMindRootView.defaultDependencies()) {
         _authViewModel = StateObject(
             wrappedValue: AuthViewModel(authRepository: dependencies.authRepository)
         )
@@ -34,6 +35,17 @@ public struct CapMindRootView: View {
                 onlineProvider: dependencies.onlineProvider
             )
         )
+    }
+
+    public static func defaultDependencies() -> CapMindDependencies {
+        let onlineProvider = MutableOnlineStateProvider(isOnline: true)
+        if let configuration = SupabaseConfiguration.fromEnvironment() {
+            return .supabaseLive(
+                configuration: configuration,
+                onlineProvider: onlineProvider
+            )
+        }
+        return .inMemoryDemo()
     }
 
     public var body: some View {

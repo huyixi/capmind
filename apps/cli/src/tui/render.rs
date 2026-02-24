@@ -103,7 +103,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, input_area: Rect, widget: 
     let cursor_row = composer
         .cursor_row()
         .saturating_sub(composer.scroll_y() as usize) as u16;
-    let raw_cursor_col = composer.cursor_col() as u16;
+    let raw_cursor_col = composer.cursor_display_col() as u16;
     let horizontal_scroll = raw_cursor_col.saturating_sub(input_area.width.saturating_sub(1));
     let paragraph_style = if is_placeholder {
         text_style.add_modifier(Modifier::DIM)

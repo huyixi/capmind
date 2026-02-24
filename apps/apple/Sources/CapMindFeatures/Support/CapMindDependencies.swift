@@ -31,7 +31,7 @@ public struct CapMindDependencies {
         let authRepository = InMemoryAuthRepository()
         let memoRepository = InMemoryMemoRepository()
         let imageRepository = InMemoryImageRepository()
-        let outboxRepository = InMemoryOutboxRepository()
+        let outboxRepository = defaultOutboxRepository()
         let syncEngine = DefaultSyncEngine(
             memoRepository: memoRepository,
             outboxRepository: outboxRepository,
@@ -58,7 +58,7 @@ public struct CapMindDependencies {
         let authRepository = SupabaseAuthRepository(client: authClient)
         let memoRepository = SupabaseMemoRepository(client: memoClient)
         let imageRepository = SupabaseImageRepository(client: storageClient)
-        let outboxRepository = InMemoryOutboxRepository()
+        let outboxRepository = defaultOutboxRepository()
         let syncEngine = DefaultSyncEngine(
             memoRepository: memoRepository,
             outboxRepository: outboxRepository,
@@ -74,5 +74,22 @@ public struct CapMindDependencies {
             syncEngine: syncEngine,
             onlineProvider: onlineProvider
         )
+    }
+
+    public static func supabaseLive(
+        configuration: SupabaseConfiguration,
+        onlineProvider: OnlineStateProviding
+    ) -> CapMindDependencies {
+        let bundle = LiveSupabaseClientBundle(configuration: configuration)
+        return supabase(
+            authClient: bundle.auth,
+            memoClient: bundle.memo,
+            storageClient: bundle.storage,
+            onlineProvider: onlineProvider
+        )
+    }
+
+    private static func defaultOutboxRepository() -> any OutboxRepository {
+        SQLiteOutboxRepository.makeDefault()
     }
 }

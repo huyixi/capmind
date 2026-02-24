@@ -1,4 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComposerAction {
@@ -60,6 +61,11 @@ impl Composer {
 
     pub fn cursor_col(&self) -> usize {
         self.cursor_col
+    }
+
+    pub fn cursor_display_col(&self) -> usize {
+        let line = &self.lines[self.cursor_row];
+        display_col_for_char_idx(line, self.cursor_col)
     }
 
     pub fn scroll_y(&self) -> u16 {
@@ -286,9 +292,14 @@ fn byte_idx_for_char(input: &str, char_idx: usize) -> usize {
         .unwrap_or(input.len())
 }
 
+fn display_col_for_char_idx(input: &str, char_idx: usize) -> usize {
+    let byte_idx = byte_idx_for_char(input, char_idx);
+    UnicodeWidthStr::width(&input[..byte_idx])
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Composer, ComposerAction};
+    use super::{Composer, ComposerAction, display_col_for_char_idx};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
@@ -335,5 +346,24 @@ mod tests {
         let mut composer = Composer::new();
         let action = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(action, ComposerAction::Cancel);
+    }
+
+    #[test]
+    fn display_col_handles_wide_chars() {
+        assert_eq!(display_col_for_char_idx("ab中c", 0), 0);
+        assert_eq!(display_col_for_char_idx("ab中c", 1), 1);
+        assert_eq!(display_col_for_char_idx("ab中c", 2), 2);
+        assert_eq!(display_col_for_char_idx("ab中c", 3), 4);
+        assert_eq!(display_col_for_char_idx("ab中c", 4), 5);
+    }
+
+    #[test]
+    fn cursor_display_col_tracks_wide_chars() {
+        let mut composer = Composer::new();
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('中'), KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(composer.cursor_col(), 3);
+        assert_eq!(composer.cursor_display_col(), 4);
     }
 }

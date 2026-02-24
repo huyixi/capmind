@@ -15,13 +15,22 @@ let package = Package(
         .library(name: "CapMindUI", targets: ["CapMindUI"]),
         .executable(name: "CapMindApp", targets: ["CapMindApp"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/supabase/supabase-swift.git", from: "2.0.0"),
+    ],
     targets: [
         .target(
             name: "CapMindCore"
         ),
         .target(
             name: "CapMindData",
-            dependencies: ["CapMindCore"]
+            dependencies: [
+                "CapMindCore",
+                .product(name: "Supabase", package: "supabase-swift"),
+            ],
+            linkerSettings: [
+                .linkedLibrary("sqlite3"),
+            ]
         ),
         .target(
             name: "CapMindFeatures",
