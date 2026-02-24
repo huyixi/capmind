@@ -21,14 +21,24 @@ Native Apple scaffold for CapMind with architecture aligned to the web app:
 - Login/sign-up/session restore view model flow.
 - Memo list pagination.
 - Create/edit/delete/restore memo flow.
-- Offline outbox queue + flush sync use case.
+- Offline outbox queue + flush sync use case (SQLite-backed by default, with in-memory fallback).
 - Search flow (online-only).
 - Version-based conflict path in sync use case.
 
 ## Supabase integration status
 
-The package uses adapter protocols (`Supabase*ClientProtocol`) so upper layers are stable.
-`UnsupportedSupabase*Client` is the default placeholder and should be replaced by concrete Supabase SDK clients.
+`supabase-swift` is integrated with concrete live clients:
+
+- `LiveSupabaseAuthClient`
+- `LiveSupabaseMemoClient`
+- `LiveSupabaseStorageClient`
+
+By default, `CapMindRootView` will auto-switch to live Supabase mode when environment variables are present:
+
+- `SUPABASE_URL` (or `NEXT_PUBLIC_SUPABASE_URL`)
+- `SUPABASE_ANON_KEY` (or `NEXT_PUBLIC_SUPABASE_ANON_KEY`)
+
+If these are missing, the app falls back to in-memory demo mode.
 
 ## Run tests
 

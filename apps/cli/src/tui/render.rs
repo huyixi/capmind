@@ -135,10 +135,9 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, input_area: Rect, widget: 
 }
 
 fn display_width_until_char(input: &str, char_idx: usize) -> u16 {
-    let width = input
-        .chars()
-        .take(char_idx)
-        .fold(0usize, |acc, c| acc.saturating_add(UnicodeWidthChar::width(c).unwrap_or(0)));
+    let width = input.chars().take(char_idx).fold(0usize, |acc, c| {
+        acc.saturating_add(UnicodeWidthChar::width(c).unwrap_or(0))
+    });
     width.min(u16::MAX as usize) as u16
 }
 
@@ -263,7 +262,8 @@ fn compute_layout(area: Rect) -> FloatingLayout {
 #[cfg(test)]
 mod tests {
     use super::{
-        calculate_horizontal_scroll, composer_display_text, compute_layout, display_width_until_char,
+        calculate_horizontal_scroll, composer_display_text, compute_layout,
+        display_width_until_char,
     };
     use ratatui::layout::Rect;
 
