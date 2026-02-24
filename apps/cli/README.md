@@ -44,6 +44,7 @@ TUI keys:
 
 - `Enter`: insert newline
 - `Ctrl+Enter`: submit memo
+- `Alt+Enter`: submit memo
 - `Shift+Enter`: submit memo
 - `Ctrl+S`: submit memo (fallback for terminals that don't emit `Ctrl+Enter`)
 - `Tab`: switch focus between Composer (top) and History (bottom) panes

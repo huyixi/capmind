@@ -109,6 +109,11 @@ impl Composer {
                 code: KeyCode::Enter,
                 modifiers,
                 ..
+            } if modifiers.contains(KeyModifiers::ALT) => ComposerAction::Submit,
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers,
+                ..
             } if modifiers == KeyModifiers::SHIFT => ComposerAction::Submit,
             KeyEvent {
                 code: KeyCode::Esc, ..
@@ -315,6 +320,13 @@ mod tests {
         let mut composer = Composer::new();
         let action =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+        assert_eq!(action, ComposerAction::Submit);
+    }
+
+    #[test]
+    fn alt_enter_submits() {
+        let mut composer = Composer::new();
+        let action = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
         assert_eq!(action, ComposerAction::Submit);
     }
 
