@@ -2,6 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use unicode_width::UnicodeWidthChar;
 
 use super::chat_widget::ChatWidget;
 use super::theme::{PaneColors, UiTheme};
@@ -100,11 +101,15 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, input_area: Rect, widget: 
     let text = composer.lines().join("\n");
     let (display_text, is_placeholder) =
         composer_display_text(&text, is_editing_memo, quit_confirmation_pending);
-    let cursor_row = composer
-        .cursor_row()
-        .saturating_sub(composer.scroll_y() as usize) as u16;
-    let raw_cursor_col = composer.cursor_display_col() as u16;
-    let horizontal_scroll = raw_cursor_col.saturating_sub(input_area.width.saturating_sub(1));
+    let cursor_row_abs = composer.cursor_row();
+    let cursor_row = cursor_row_abs.saturating_sub(composer.scroll_y() as usize) as u16;
+    let current_line = composer
+        .lines()
+        .get(cursor_row_abs)
+        .map(String::as_str)
+        .unwrap_or("");
+    let raw_cursor_col = display_width_until_char(current_line, composer.cursor_col());
+    let horizontal_scroll = calculate_horizontal_scroll(raw_cursor_col, input_area.width);
     let paragraph_style = if is_placeholder {
         text_style.add_modifier(Modifier::DIM)
     } else {
@@ -127,6 +132,17 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, input_area: Rect, widget: 
             frame.set_cursor_position((x, y));
         }
     }
+}
+
+fn display_width_until_char(input: &str, char_idx: usize) -> u16 {
+    let width = input.chars().take(char_idx).fold(0usize, |acc, c| {
+        acc.saturating_add(UnicodeWidthChar::width(c).unwrap_or(0))
+    });
+    width.min(u16::MAX as usize) as u16
+}
+
+fn calculate_horizontal_scroll(cursor_col: u16, viewport_width: u16) -> u16 {
+    cursor_col.saturating_sub(viewport_width.saturating_sub(1))
 }
 
 fn composer_display_text(
@@ -245,7 +261,10 @@ fn compute_layout(area: Rect) -> FloatingLayout {
 
 #[cfg(test)]
 mod tests {
-    use super::{composer_display_text, compute_layout};
+    use super::{
+        calculate_horizontal_scroll, composer_display_text, compute_layout,
+        display_width_until_char,
+    };
     use ratatui::layout::Rect;
 
     #[test]
@@ -316,4 +335,23 @@ mod tests {
         assert!(is_placeholder);
     }
 
+    #[test]
+    fn display_width_until_char_counts_cjk_as_double_width() {
+        let input = "你好";
+        assert_eq!(display_width_until_char(input, input.chars().count()), 4);
+    }
+
+    #[test]
+    fn display_width_until_char_handles_mixed_ascii_and_cjk() {
+        let input = "a你b";
+        assert_eq!(display_width_until_char(input, 1), 1);
+        assert_eq!(display_width_until_char(input, 2), 3);
+        assert_eq!(display_width_until_char(input, 3), 4);
+    }
+
+    #[test]
+    fn calculate_horizontal_scroll_uses_display_width_cursor() {
+        assert_eq!(calculate_horizontal_scroll(4, 3), 2);
+        assert_eq!(calculate_horizontal_scroll(2, 3), 0);
+    }
 }
