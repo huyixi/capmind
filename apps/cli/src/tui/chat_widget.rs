@@ -89,6 +89,14 @@ impl ChatWidget {
             return self.handle_delete_confirmation_key(key_event);
         }
 
+        if self.focus == FocusArea::Composer
+            && key_event.code == KeyCode::Esc
+            && self.bottom_pane.composer_mut().is_insert_mode()
+        {
+            self.quit_confirmation_pending = false;
+            return self.handle_composer_key(key_event);
+        }
+
         if key_event.code == KeyCode::Esc {
             if self.quit_confirmation_pending {
                 return WidgetAction::Quit;
@@ -332,7 +340,8 @@ impl ChatWidget {
                 WidgetAction::None
             }
             KeyCode::Char(c)
-                if (key_event.modifiers.is_empty() || key_event.modifiers == KeyModifiers::SHIFT)
+                if (key_event.modifiers.is_empty()
+                    || key_event.modifiers == KeyModifiers::SHIFT)
                     && c.eq_ignore_ascii_case(&'k') =>
             {
                 self.move_history_selection(-1);
@@ -343,7 +352,8 @@ impl ChatWidget {
                 WidgetAction::None
             }
             KeyCode::Char(c)
-                if (key_event.modifiers.is_empty() || key_event.modifiers == KeyModifiers::SHIFT)
+                if (key_event.modifiers.is_empty()
+                    || key_event.modifiers == KeyModifiers::SHIFT)
                     && c.eq_ignore_ascii_case(&'j') =>
             {
                 self.move_history_selection(1);
@@ -800,6 +810,32 @@ mod tests {
 
         let second = widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(second, WidgetAction::Quit);
+    }
+
+    #[test]
+    fn esc_in_composer_insert_switches_mode_without_quit_confirmation() {
+        let mut widget = ChatWidget::new();
+
+        let action = widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(action, WidgetAction::None);
+        assert!(!widget.quit_confirmation_pending());
+        assert!(!widget.bottom_pane_mut().composer_mut().is_insert_mode());
+    }
+
+    #[test]
+    fn esc_in_composer_normal_then_uses_global_quit_confirmation() {
+        let mut widget = ChatWidget::new();
+
+        let first = widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(first, WidgetAction::None);
+        assert!(!widget.quit_confirmation_pending());
+
+        let second = widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(second, WidgetAction::None);
+        assert!(widget.quit_confirmation_pending());
+
+        let third = widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(third, WidgetAction::Quit);
     }
 
     #[test]

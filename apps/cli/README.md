@@ -47,17 +47,22 @@ TUI keys:
 - `Alt+Enter`: submit memo
 - `Shift+Enter`: submit memo
 - `Ctrl+S`: submit memo (fallback for terminals that don't emit `Ctrl+Enter`)
+- Composer vim mode: starts in `INSERT`, `Esc` switches to `NORMAL`
+- `Esc` in `NORMAL` (or outside Composer insert mode): press twice to quit TUI (with confirmation)
+- `NORMAL` mode navigation: `h`/`j`/`k`/`l`, `w`/`b`, `0`, `$`
+- `NORMAL` mode edit commands: `i`/`a`/`I`/`A`/`o`/`O`, `x`, `dd` (delete current line)
 - `Tab`: switch focus between Composer (top) and History (bottom) panes
 - `↑` / `k` (in History): move selection up
 - `↓` / `j` (in History): move selection down
 - `Enter` (in History): load selected memo into Composer for edit mode
 - `q` (in History): quit TUI
 - `r` (in History): refresh memo list
-- `Esc`: press twice to quit TUI (with confirmation)
 - `Ctrl+C`: quit TUI immediately
 - `d` (in History): open delete confirmation for selected memo
 - `Enter` / `y` / `d` (in delete confirmation): confirm delete
 - `n` / `Esc` (in delete confirmation): cancel delete
+
+Vim support is intentionally basic: no `:` command mode, counts (like `3w`), macros, or text objects.
 
 TUI history keeps up to the latest 100 entries.
 Latest memos are loaded into history in the background after startup (non-blocking).
