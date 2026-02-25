@@ -41,6 +41,12 @@ pub enum PageMode {
     MemoList,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpOverlayContext {
+    ComposerNormal,
+    MemoList,
+}
+
 #[derive(Debug, Clone)]
 struct PendingDelete {
     memo_id: String,
@@ -58,12 +64,6 @@ enum ComposerMode {
 }
 
 #[derive(Debug, Clone)]
-enum CommandState {
-    Inactive,
-    Active { buffer: String },
-}
-
-#[derive(Debug, Clone)]
 pub struct ChatWidget {
     bottom_pane: BottomPane,
     history: VecDeque<HistoryCell>,
@@ -74,7 +74,7 @@ pub struct ChatWidget {
     quit_confirmation_pending: bool,
     page_mode: PageMode,
     split_list_open: bool,
-    command_state: CommandState,
+    help_overlay: Option<HelpOverlayContext>,
     status_message: Option<String>,
     status_message_expires_at: Option<Instant>,
     wq_submission_in_progress: bool,
@@ -101,7 +101,7 @@ impl ChatWidget {
             quit_confirmation_pending: false,
             page_mode: PageMode::Composer,
             split_list_open: false,
-            command_state: CommandState::Inactive,
+            help_overlay: None,
             status_message: None,
             status_message_expires_at: None,
             wq_submission_in_progress: false,
@@ -128,8 +128,8 @@ impl ChatWidget {
             return WidgetAction::None;
         }
 
-        if matches!(self.command_state, CommandState::Active { .. }) {
-            return self.handle_command_key(key_event);
+        if self.help_overlay.is_some() {
+            return self.handle_help_overlay_key(key_event);
         }
 
         if self.pending_delete.is_some() {
@@ -149,7 +149,7 @@ impl ChatWidget {
             && key_event.code == KeyCode::Esc
             && self.bottom_pane.composer().is_insert_mode()
         {
-            self.quit_confirmation_pending = false;
+            self.quit_confirmation_pending = true;
             return self.handle_composer_key(key_event);
         }
 
@@ -163,9 +163,8 @@ impl ChatWidget {
 
         self.quit_confirmation_pending = false;
 
-        if self.should_enter_command_mode(key_event) {
-            self.enter_command_mode();
-            return WidgetAction::None;
+        if let Some(action) = self.handle_normal_mode_command_key(key_event) {
+            return action;
         }
 
         match self.focus {
@@ -193,7 +192,6 @@ impl ChatWidget {
     pub fn open_memo_list_page(&mut self) {
         self.page_mode = PageMode::MemoList;
         self.focus = FocusArea::History;
-        self.command_state = CommandState::Inactive;
         self.pending_delete = None;
     }
 
@@ -228,6 +226,10 @@ impl ChatWidget {
         self.split_list_open
     }
 
+    pub fn help_overlay(&self) -> Option<HelpOverlayContext> {
+        self.help_overlay
+    }
+
     pub fn delete_confirmation_text(&self) -> Option<&str> {
         self.pending_delete
             .as_ref()
@@ -240,13 +242,6 @@ impl ChatWidget {
 
     pub fn is_editing_memo(&self) -> bool {
         matches!(self.composer_mode, ComposerMode::Edit { .. })
-    }
-
-    pub fn command_buffer(&self) -> Option<&str> {
-        match &self.command_state {
-            CommandState::Inactive => None,
-            CommandState::Active { buffer } => Some(buffer.as_str()),
-        }
     }
 
     pub fn status_message(&self) -> Option<&str> {
@@ -508,6 +503,11 @@ impl ChatWidget {
     }
 
     fn handle_memo_list_key(&mut self, key_event: KeyEvent) -> WidgetAction {
+        if is_help_key(key_event) {
+            self.help_overlay = Some(HelpOverlayContext::MemoList);
+            return WidgetAction::None;
+        }
+
         match key_event.code {
             KeyCode::Up => {
                 self.move_history_selection(-1);
@@ -584,71 +584,73 @@ impl ChatWidget {
             }
             KeyCode::Esc => {
                 self.wq_failure_prompt = None;
-                self.set_status_message("Continue editing. Use :w to retry.".to_string());
+                self.set_status_message("Continue editing. Use w to retry.".to_string());
                 WidgetAction::None
             }
             KeyCode::Char(c) if c.eq_ignore_ascii_case(&'c') || c.eq_ignore_ascii_case(&'n') => {
                 self.wq_failure_prompt = None;
-                self.set_status_message("Continue editing. Use :w to retry.".to_string());
+                self.set_status_message("Continue editing. Use w to retry.".to_string());
                 WidgetAction::None
             }
             _ => WidgetAction::None,
         }
     }
 
-    fn handle_command_key(&mut self, key_event: KeyEvent) -> WidgetAction {
-        let CommandState::Active { buffer } = &mut self.command_state else {
-            return WidgetAction::None;
-        };
-
+    fn handle_help_overlay_key(&mut self, key_event: KeyEvent) -> WidgetAction {
         match key_event.code {
             KeyCode::Esc => {
-                self.command_state = CommandState::Inactive;
-                WidgetAction::None
+                self.help_overlay = None;
             }
-            KeyCode::Backspace => {
-                if buffer.chars().count() > 1 {
-                    buffer.pop();
-                }
-                WidgetAction::None
+            KeyCode::Char('?') if is_plain_or_shift(key_event.modifiers) => {
+                self.help_overlay = None;
             }
-            KeyCode::Enter => {
-                let command = buffer.trim_start_matches(':').trim().to_ascii_lowercase();
-                self.command_state = CommandState::Inactive;
-                self.execute_command(&command)
+            KeyCode::Char(c)
+                if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'q') =>
+            {
+                self.help_overlay = None;
             }
-            KeyCode::Char(c) if is_plain_or_shift(key_event.modifiers) => {
-                buffer.push(c);
-                WidgetAction::None
-            }
-            _ => WidgetAction::None,
+            _ => {}
         }
+        WidgetAction::None
     }
 
-    fn execute_command(&mut self, command: &str) -> WidgetAction {
-        if command.is_empty() {
-            self.clear_status_message();
-            return WidgetAction::None;
+    fn handle_normal_mode_command_key(&mut self, key_event: KeyEvent) -> Option<WidgetAction> {
+        if self.focus != FocusArea::Composer {
+            return None;
+        }
+        if self.bottom_pane.composer().vim_mode() != VimMode::Normal {
+            return None;
+        }
+        if !is_plain_or_shift(key_event.modifiers) {
+            return None;
         }
 
-        match command {
-            "w" => self.build_submit_action(false),
-            "wq" => self.build_submit_action(true),
-            "q" => {
+        let KeyCode::Char(c) = key_event.code else {
+            return None;
+        };
+
+        let action = match c {
+            '?' => {
+                self.help_overlay = Some(HelpOverlayContext::ComposerNormal);
+                WidgetAction::None
+            }
+            'w' => self.build_submit_action(false),
+            'W' => self.build_submit_action(true),
+            'q' => {
                 if self.composer_dirty {
-                    self.set_status_message("Unsaved changes. Use :w, :wq, or :q!".to_string());
+                    self.set_status_message("Unsaved changes. Use w, W, or Q.".to_string());
                     WidgetAction::None
                 } else {
                     WidgetAction::Quit
                 }
             }
-            "q!" => WidgetAction::Quit,
-            "l" | "ls" | "list" => {
+            'Q' => WidgetAction::Quit,
+            'l' => {
                 self.page_mode = PageMode::MemoList;
                 self.focus = FocusArea::History;
                 WidgetAction::None
             }
-            "splitlist" => {
+            'p' => {
                 self.split_list_open = !self.split_list_open;
                 if !self.split_list_open && self.focus == FocusArea::History {
                     self.focus = FocusArea::Composer;
@@ -660,11 +662,10 @@ impl ChatWidget {
                 });
                 WidgetAction::None
             }
-            _ => {
-                self.set_status_message(format!("Unknown command: :{command}"));
-                WidgetAction::None
-            }
-        }
+            _ => return None,
+        };
+
+        Some(action)
     }
 
     fn build_submit_action(&mut self, before_quit: bool) -> WidgetAction {
@@ -672,9 +673,9 @@ impl ChatWidget {
         if before_quit {
             self.wq_submission_in_progress = true;
             self.wq_failure_prompt = None;
-            self.set_status_message(":wq submitting in background...".to_string());
+            self.set_status_message("W submitting in background...".to_string());
         } else {
-            self.set_status_message(":w submitting...".to_string());
+            self.set_status_message("w submitting...".to_string());
         }
 
         match &self.composer_mode {
@@ -704,19 +705,6 @@ impl ChatWidget {
                 }
             }
         }
-    }
-
-    fn should_enter_command_mode(&self, key_event: KeyEvent) -> bool {
-        self.focus == FocusArea::Composer
-            && key_event.code == KeyCode::Char(':')
-            && is_plain_or_shift(key_event.modifiers)
-            && self.bottom_pane.composer().vim_mode() == VimMode::Normal
-    }
-
-    fn enter_command_mode(&mut self) {
-        self.command_state = CommandState::Active {
-            buffer: ":".to_string(),
-        };
     }
 
     fn confirm_pending_delete(&mut self) -> WidgetAction {
@@ -772,7 +760,6 @@ impl ChatWidget {
         self.bottom_pane.composer_mut().set_text(&cell.full_text);
         self.focus = FocusArea::Composer;
         self.page_mode = PageMode::Composer;
-        self.command_state = CommandState::Inactive;
         self.composer_mode = match (cell.memo_id, cell.memo_version) {
             (Some(memo_id), Some(expected_version)) => ComposerMode::Edit {
                 memo_id,
@@ -839,7 +826,6 @@ impl ChatWidget {
         self.bottom_pane.composer_mut().clear();
         self.focus = FocusArea::Composer;
         self.page_mode = PageMode::Composer;
-        self.command_state = CommandState::Inactive;
         self.composer_mode = ComposerMode::Create;
         self.set_clean_composer_text("");
     }
@@ -914,9 +900,20 @@ fn is_plain_or_shift(modifiers: KeyModifiers) -> bool {
     modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
 }
 
+fn is_help_key(key_event: KeyEvent) -> bool {
+    matches!(
+        key_event,
+        KeyEvent {
+            code: KeyCode::Char('?'),
+            modifiers,
+            ..
+        } if is_plain_or_shift(modifiers)
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ChatWidget, PageMode, WidgetAction};
+    use super::{ChatWidget, HelpOverlayContext, PageMode, WidgetAction};
     use crate::supabase::RecentMemo;
     use crate::tui::types::MAX_HISTORY_ITEMS;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -1015,17 +1012,25 @@ mod tests {
     }
 
     #[test]
-    fn command_mode_opens_only_in_normal_mode() {
+    fn colon_still_inserts_text_in_insert_mode() {
         let mut widget = ChatWidget::new();
 
-        let insert_colon = widget.handle_key_event(key(KeyCode::Char(':')));
-        assert_eq!(insert_colon, WidgetAction::None);
-        assert_eq!(widget.command_buffer(), None);
+        let action = widget.handle_key_event(key(KeyCode::Char(':')));
+        assert_eq!(action, WidgetAction::None);
         assert_eq!(widget.bottom_pane_mut().composer_mut().text(), ":");
+    }
 
+    #[test]
+    fn normal_mode_unmapped_keys_still_reach_composer() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('a')));
+        widget.handle_key_event(key(KeyCode::Char('b')));
+        widget.handle_key_event(key(KeyCode::Char('c')));
         widget.handle_key_event(key(KeyCode::Esc));
-        widget.handle_key_event(key(KeyCode::Char(':')));
-        assert_eq!(widget.command_buffer(), Some(":"));
+
+        let action = widget.handle_key_event(key(KeyCode::Char('x')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "ab");
     }
 
     #[test]
@@ -1034,10 +1039,7 @@ mod tests {
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        widget.handle_key_event(key(KeyCode::Char(':')));
-        widget.handle_key_event(key(KeyCode::Char('w')));
-        let action = widget.handle_key_event(key(KeyCode::Enter));
-
+        let action = widget.handle_key_event(key(KeyCode::Char('w')));
         assert_eq!(action, WidgetAction::SubmitCreate("h".to_string()));
     }
 
@@ -1047,27 +1049,22 @@ mod tests {
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        widget.handle_key_event(key(KeyCode::Char(':')));
-        widget.handle_key_event(key(KeyCode::Char('q')));
-        let action = widget.handle_key_event(key(KeyCode::Enter));
+        let action = widget.handle_key_event(key(KeyCode::Char('q')));
 
         assert_eq!(action, WidgetAction::None);
         assert_eq!(
             widget.status_message(),
-            Some("Unsaved changes. Use :w, :wq, or :q!")
+            Some("Unsaved changes. Use w, W, or Q.")
         );
     }
 
     #[test]
-    fn command_q_force_quits_even_when_dirty() {
+    fn command_shift_q_force_quits_even_when_dirty() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        widget.handle_key_event(key(KeyCode::Char(':')));
-        widget.handle_key_event(key(KeyCode::Char('q')));
-        widget.handle_key_event(key(KeyCode::Char('!')));
-        let action = widget.handle_key_event(key(KeyCode::Enter));
+        let action = widget.handle_key_event(shift_char('Q'));
 
         assert_eq!(action, WidgetAction::Quit);
     }
@@ -1081,9 +1078,7 @@ mod tests {
         ]);
         widget.handle_key_event(key(KeyCode::Esc));
 
-        widget.handle_key_event(key(KeyCode::Char(':')));
-        widget.handle_key_event(key(KeyCode::Char('l')));
-        let action = widget.handle_key_event(key(KeyCode::Enter));
+        let action = widget.handle_key_event(key(KeyCode::Char('l')));
         assert_eq!(action, WidgetAction::None);
         assert_eq!(widget.page_mode(), PageMode::MemoList);
 
@@ -1096,12 +1091,96 @@ mod tests {
     }
 
     #[test]
+    fn help_opens_in_composer_normal_mode() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(key(KeyCode::Char('?')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(
+            widget.help_overlay(),
+            Some(HelpOverlayContext::ComposerNormal)
+        );
+    }
+
+    #[test]
+    fn help_opens_in_memo_list_page() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        let action = widget.handle_key_event(key(KeyCode::Char('?')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.help_overlay(), Some(HelpOverlayContext::MemoList));
+    }
+
+    #[test]
+    fn help_overlay_closes_on_question_esc_or_q() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        assert!(widget.help_overlay().is_some());
+
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        assert_eq!(widget.help_overlay(), None);
+
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        assert!(widget.help_overlay().is_some());
+        widget.handle_key_event(key(KeyCode::Esc));
+        assert_eq!(widget.help_overlay(), None);
+
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        assert!(widget.help_overlay().is_some());
+        widget.handle_key_event(key(KeyCode::Char('q')));
+        assert_eq!(widget.help_overlay(), None);
+    }
+
+    #[test]
+    fn help_overlay_blocks_commands_until_closed() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('h')));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        assert_eq!(
+            widget.help_overlay(),
+            Some(HelpOverlayContext::ComposerNormal)
+        );
+
+        let blocked = widget.handle_key_event(key(KeyCode::Char('w')));
+        assert_eq!(blocked, WidgetAction::None);
+        assert!(!widget.wq_submission_in_progress());
+        assert_eq!(
+            widget.help_overlay(),
+            Some(HelpOverlayContext::ComposerNormal)
+        );
+
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        let submit = widget.handle_key_event(key(KeyCode::Char('w')));
+        assert_eq!(submit, WidgetAction::SubmitCreate("h".to_string()));
+    }
+
+    #[test]
+    fn q_with_memo_list_help_open_closes_help_only() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        assert_eq!(widget.help_overlay(), Some(HelpOverlayContext::MemoList));
+
+        let action = widget.handle_key_event(key(KeyCode::Char('q')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.help_overlay(), None);
+        assert_eq!(widget.page_mode(), PageMode::MemoList);
+    }
+
+    #[test]
     fn enter_in_memo_list_without_selection_returns_to_insert_mode() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Esc));
         assert!(!widget.bottom_pane_mut().composer_mut().is_insert_mode());
 
-        run_command(&mut widget, "list");
+        open_memo_list(&mut widget);
         let action = widget.handle_key_event(key(KeyCode::Enter));
         assert_eq!(action, WidgetAction::None);
         assert_eq!(widget.page_mode(), PageMode::Composer);
@@ -1113,7 +1192,7 @@ mod tests {
         let mut widget = ChatWidget::new();
         widget.hydrate_history_from_memos(vec![memo("memo-1", "memo-1", "1")]);
         widget.handle_key_event(key(KeyCode::Esc));
-        run_command(&mut widget, "list");
+        open_memo_list(&mut widget);
         assert_eq!(widget.page_mode(), PageMode::MemoList);
         assert!(!widget.bottom_pane_mut().composer_mut().is_insert_mode());
 
@@ -1127,7 +1206,7 @@ mod tests {
     fn esc_in_memo_list_returns_to_composer_insert_mode() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Esc));
-        run_command(&mut widget, "list");
+        open_memo_list(&mut widget);
         assert_eq!(widget.page_mode(), PageMode::MemoList);
         assert!(!widget.bottom_pane_mut().composer_mut().is_insert_mode());
 
@@ -1142,7 +1221,7 @@ mod tests {
         let mut widget = ChatWidget::new();
         widget.hydrate_history_from_memos(vec![memo("memo-1", "memo-1", "1")]);
         widget.handle_key_event(key(KeyCode::Esc));
-        run_command(&mut widget, "list");
+        open_memo_list(&mut widget);
 
         let first = widget.handle_key_event(key(KeyCode::Char('d')));
         assert_eq!(first, WidgetAction::None);
@@ -1163,23 +1242,20 @@ mod tests {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Esc));
 
-        run_command(&mut widget, "splitlist");
+        widget.handle_key_event(key(KeyCode::Char('p')));
         assert!(widget.split_list_open());
 
-        run_command(&mut widget, "splitlist");
+        widget.handle_key_event(key(KeyCode::Char('p')));
         assert!(!widget.split_list_open());
     }
 
     #[test]
-    fn command_wq_emits_background_submit_action() {
+    fn command_shift_w_emits_background_submit_action() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        widget.handle_key_event(key(KeyCode::Char(':')));
-        widget.handle_key_event(key(KeyCode::Char('w')));
-        widget.handle_key_event(key(KeyCode::Char('q')));
-        let action = widget.handle_key_event(key(KeyCode::Enter));
+        let action = widget.handle_key_event(shift_char('W'));
 
         assert_eq!(
             action,
@@ -1204,29 +1280,25 @@ mod tests {
     }
 
     #[test]
-    fn esc_in_composer_insert_switches_mode_without_quit_confirmation() {
+    fn esc_in_composer_insert_switches_mode_and_primes_quit_confirmation() {
         let mut widget = ChatWidget::new();
 
         let action = widget.handle_key_event(key(KeyCode::Esc));
         assert_eq!(action, WidgetAction::None);
-        assert!(!widget.quit_confirmation_pending());
+        assert!(widget.quit_confirmation_pending());
         assert!(!widget.bottom_pane_mut().composer_mut().is_insert_mode());
     }
 
     #[test]
-    fn esc_in_composer_normal_then_uses_global_quit_confirmation() {
+    fn esc_twice_from_composer_insert_quits() {
         let mut widget = ChatWidget::new();
 
         let first = widget.handle_key_event(key(KeyCode::Esc));
         assert_eq!(first, WidgetAction::None);
-        assert!(!widget.quit_confirmation_pending());
-
-        let second = widget.handle_key_event(key(KeyCode::Esc));
-        assert_eq!(second, WidgetAction::None);
         assert!(widget.quit_confirmation_pending());
 
-        let third = widget.handle_key_event(key(KeyCode::Esc));
-        assert_eq!(third, WidgetAction::Quit);
+        let second = widget.handle_key_event(key(KeyCode::Esc));
+        assert_eq!(second, WidgetAction::Quit);
     }
 
     fn history_texts(widget: &ChatWidget) -> Vec<String> {
@@ -1255,16 +1327,16 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::CONTROL)
     }
 
-    fn run_command(widget: &mut ChatWidget, command: &str) {
-        widget.handle_key_event(key(KeyCode::Char(':')));
-        for c in command.chars() {
-            widget.handle_key_event(key(KeyCode::Char(c)));
-        }
-        widget.handle_key_event(key(KeyCode::Enter));
+    fn shift_char(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT)
+    }
+
+    fn open_memo_list(widget: &mut ChatWidget) {
+        widget.handle_key_event(key(KeyCode::Char('l')));
     }
 
     fn open_split_list(widget: &mut ChatWidget) {
         widget.handle_key_event(key(KeyCode::Esc));
-        run_command(widget, "splitlist");
+        widget.handle_key_event(key(KeyCode::Char('p')));
     }
 }

@@ -3,7 +3,6 @@ mod bottom_pane;
 mod chat_widget;
 mod composer;
 mod render;
-mod theme;
 mod types;
 
 use crate::error::AppError;

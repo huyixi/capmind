@@ -1,11 +1,10 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
-use super::chat_widget::{ChatWidget, PageMode};
+use super::chat_widget::{ChatWidget, HelpOverlayContext, PageMode};
 use super::composer::VimMode;
-use super::theme::{PaneColors, UiTheme};
 use super::types::FocusArea;
 
 const HISTORY_FIXED_HEIGHT: u16 = 6;
@@ -16,30 +15,24 @@ const COMPOSER_INNER_PADDING_BOTTOM: u16 = 1;
 const COMPOSER_PLACEHOLDER: &str = "What's on your mind?";
 const COMPOSER_EDIT_PLACEHOLDER: &str = "Editing selected memo...";
 const COMPOSER_QUIT_CONFIRM_PLACEHOLDER: &str = "Press Esc again to quit";
-const MEMO_TIME_WIDTH: usize = 19;
-const MEMO_COL_GAP_WIDTH: usize = 2;
 
-pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget, theme: &UiTheme) {
+pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget) {
     let area = frame.area();
     if area.width == 0 || area.height == 0 {
         return;
     }
 
     match widget.page_mode() {
-        PageMode::Composer => render_composer_page(frame, area, widget, theme),
-        PageMode::MemoList => render_memo_list_page(frame, area, widget, &theme.composer),
+        PageMode::Composer => render_composer_page(frame, area, widget),
+        PageMode::MemoList => render_memo_list_page(frame, area, widget),
     }
 
+    render_help_overlay(frame, area, widget.help_overlay());
     render_delete_confirmation(frame, area, widget.delete_confirmation_text());
     render_wq_failure_prompt(frame, area, widget.wq_failure_prompt());
 }
 
-fn render_composer_page(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    widget: &mut ChatWidget,
-    theme: &UiTheme,
-) {
+fn render_composer_page(frame: &mut Frame<'_>, area: Rect, widget: &mut ChatWidget) {
     let layout = if widget.split_list_open() {
         compute_split_layout(area)
     } else {
@@ -48,7 +41,7 @@ fn render_composer_page(
     let composer_mode = widget.bottom_pane_mut().composer_mut().vim_mode();
 
     if widget.split_list_open() {
-        render_history(frame, layout.history, widget, &theme.composer);
+        render_history(frame, layout.history, widget);
     }
     render_composer(
         frame,
@@ -59,13 +52,8 @@ fn render_composer_page(
     );
 }
 
-fn render_memo_list_page(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    widget: &ChatWidget,
-    colors: &PaneColors,
-) {
-    let pane_style = Style::default().fg(Color::Reset).bg(colors.normal_bg);
+fn render_memo_list_page(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget) {
+    let pane_style = Style::default();
     frame.render_widget(Block::default().style(pane_style), area);
 
     if area.height == 0 {
@@ -99,13 +87,8 @@ fn render_memo_list_page(
                 .history()
                 .iter()
                 .map(|cell| {
-                    let timestamp = cell.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
                     let memo_text = cell.full_text.replace('\n', " ");
-                    ListItem::new(format_memo_list_row(
-                        &timestamp,
-                        &memo_text,
-                        list_area.width as usize,
-                    ))
+                    ListItem::new(format_memo_list_row(&memo_text, list_area.width as usize))
                 })
                 .collect();
 
@@ -113,8 +96,6 @@ fn render_memo_list_page(
                 .style(pane_style)
                 .highlight_style(
                     Style::default()
-                        .fg(Color::Reset)
-                        .bg(Color::Reset)
                         .add_modifier(Modifier::REVERSED)
                         .add_modifier(Modifier::BOLD),
                 )
@@ -125,36 +106,37 @@ fn render_memo_list_page(
         }
     }
 
-    let footer_text = widget
-        .status_message()
-        .unwrap_or("j/k or arrows move | Enter open | d delete | q/Esc back");
+    let selected_memo_time = widget
+        .selected_history()
+        .and_then(|index| widget.history().get(index))
+        .map(|cell| cell.created_at.format("%Y-%m-%d %H:%M:%S").to_string());
+    let footer_text = memo_list_footer_text(widget.status_message(), selected_memo_time.as_deref());
     frame.render_widget(
         Paragraph::new(footer_text).style(Style::default().add_modifier(Modifier::DIM)),
         footer,
     );
 }
 
-fn format_memo_list_row(timestamp: &str, memo: &str, total_width: usize) -> String {
+fn memo_list_footer_text(status_message: Option<&str>, selected_memo_time: Option<&str>) -> String {
+    if let Some(status) = status_message {
+        return status.to_string();
+    }
+    selected_memo_time.unwrap_or("").to_string()
+}
+
+fn format_memo_list_row(memo: &str, total_width: usize) -> String {
     if total_width == 0 {
         return String::new();
     }
-
-    let time = truncate_with_ellipsis(timestamp, MEMO_TIME_WIDTH);
-    let memo_width = total_width.saturating_sub(MEMO_TIME_WIDTH + MEMO_COL_GAP_WIDTH);
-    if memo_width == 0 {
-        return format!("{time:<MEMO_TIME_WIDTH$}");
-    }
-
-    let memo_display = truncate_with_ellipsis(memo, memo_width);
-    format!("{time:<MEMO_TIME_WIDTH$}  {memo_display}")
+    truncate_with_ellipsis(memo, total_width)
 }
 
-fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget, colors: &PaneColors) {
+fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget) {
     if area.height == 0 {
         return;
     }
 
-    let pane_style = Style::default().fg(Color::Reset).bg(colors.normal_bg);
+    let pane_style = Style::default();
 
     frame.render_widget(Block::default().style(pane_style), area);
     let content_area = area;
@@ -176,17 +158,14 @@ fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget, colors
         .history()
         .iter()
         .map(|cell| {
-            let ts = cell.created_at.format("%Y-%m-%d %H:%M:%S");
             let text = cell.full_text.replace('\n', " ");
-            ListItem::new(format!("{ts} {text}"))
+            ListItem::new(text)
         })
         .collect();
 
     let history_focused = widget.focus() == FocusArea::History;
     let highlight_style = if history_focused {
         Style::default()
-            .fg(Color::Reset)
-            .bg(Color::Reset)
             .add_modifier(Modifier::REVERSED)
             .add_modifier(Modifier::BOLD)
     } else {
@@ -215,11 +194,10 @@ fn render_composer(
 
     let focused = widget.focus() == FocusArea::Composer;
     let block_style = Style::default();
-    let text_style = Style::default().fg(Color::Reset);
+    let text_style = Style::default();
 
     frame.render_widget(Block::default().style(block_style), area);
 
-    let command_buffer = widget.command_buffer().map(ToString::to_string);
     let status_message = widget.status_message().map(ToString::to_string);
     let quit_confirmation_pending = widget.quit_confirmation_pending();
     let is_editing_memo = widget.is_editing_memo();
@@ -245,7 +223,6 @@ fn render_composer(
     let footer = composer_footer_text(
         composer_mode,
         quit_confirmation_pending,
-        command_buffer.as_deref(),
         status_message.as_deref(),
     );
     frame.render_widget(
@@ -259,14 +236,6 @@ fn render_composer(
     );
 
     if focused {
-        if let Some(command) = command_buffer {
-            let col = (command.chars().count() as u16).min(area.width.saturating_sub(1));
-            let x = area.x.saturating_add(col);
-            let y = area.y.saturating_add(area.height.saturating_sub(1));
-            frame.set_cursor_position((x, y));
-            return;
-        }
-
         let row = cursor_row;
         if row < input_area.height {
             let max_col = input_area.width.saturating_sub(1);
@@ -283,13 +252,8 @@ fn render_composer(
 fn composer_footer_text(
     mode: VimMode,
     quit_confirmation_pending: bool,
-    command_buffer: Option<&str>,
     status_message: Option<&str>,
 ) -> String {
-    if let Some(command) = command_buffer {
-        return command.to_string();
-    }
-
     if let Some(status) = status_message {
         return status.to_string();
     }
@@ -299,7 +263,7 @@ fn composer_footer_text(
     } else if mode == VimMode::Insert {
         "Mode: INSERT".to_string()
     } else {
-        "Mode: NORMAL".to_string()
+        "Mode: NORMAL (? help)".to_string()
     }
 }
 
@@ -350,10 +314,61 @@ fn render_delete_confirmation(frame: &mut Frame<'_>, area: Rect, preview: Option
                     .borders(Borders::ALL)
                     .title("Confirm Delete"),
             )
-            .style(Style::default().fg(Color::Reset).bg(Color::Reset))
+            .style(Style::default())
             .wrap(Wrap { trim: true }),
         popup,
     );
+}
+
+fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, context: Option<HelpOverlayContext>) {
+    let Some(context) = context else {
+        return;
+    };
+    if area.width < 40 || area.height < 8 {
+        return;
+    }
+
+    let content = help_overlay_content(context);
+    let line_count = content.lines().count().min(u16::MAX as usize) as u16;
+    let popup_width = area.width.min(92);
+    let popup_height = line_count.saturating_add(2).max(8).min(area.height);
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
+        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(content)
+            .block(Block::default().borders(Borders::ALL).title("Help"))
+            .style(Style::default())
+            .wrap(Wrap { trim: true }),
+        popup,
+    );
+}
+
+fn help_overlay_content(context: HelpOverlayContext) -> &'static str {
+    match context {
+        HelpOverlayContext::ComposerNormal => {
+            "Composer NORMAL\n\
+w submit | W submit+quit on success\n\
+q quit if clean | Q force quit\n\
+l open memo list | p toggle split list\n\
+h/j/k/l move | b 0 $ | x dd edit\n\
+i/a/I/A/o/O enter insert actions\n\
+? / Esc / q close help"
+        }
+        HelpOverlayContext::MemoList => {
+            "Memo List\n\
+j/k or arrows move selection\n\
+Enter open selected memo\n\
+d delete selected memo\n\
+q or Esc return to composer\n\
+? / Esc / q close help"
+        }
+    }
 }
 
 fn render_wq_failure_prompt(frame: &mut Frame<'_>, area: Rect, message: Option<&str>) {
@@ -381,7 +396,7 @@ fn render_wq_failure_prompt(frame: &mut Frame<'_>, area: Rect, message: Option<&
     frame.render_widget(
         Paragraph::new(content)
             .block(Block::default().borders(Borders::ALL).title("Save Failed"))
-            .style(Style::default().fg(Color::Reset).bg(Color::Reset))
+            .style(Style::default())
             .wrap(Wrap { trim: true }),
         popup,
     );
@@ -486,8 +501,9 @@ mod tests {
     use super::{
         calculate_horizontal_scroll, composer_display_text, composer_footer_text,
         compute_composer_only_layout, compute_split_layout, format_memo_list_row,
-        truncate_with_ellipsis,
+        help_overlay_content, memo_list_footer_text, truncate_with_ellipsis,
     };
+    use crate::tui::chat_widget::HelpOverlayContext;
     use crate::tui::composer::VimMode;
     use ratatui::layout::Rect;
 
@@ -561,17 +577,9 @@ mod tests {
     }
 
     #[test]
-    fn composer_footer_prefers_command_buffer() {
-        assert_eq!(
-            composer_footer_text(VimMode::Normal, false, Some(":w"), Some("status")),
-            ":w"
-        );
-    }
-
-    #[test]
     fn composer_footer_uses_status_before_mode_tip() {
         assert_eq!(
-            composer_footer_text(VimMode::Insert, false, None, Some("saving...")),
+            composer_footer_text(VimMode::Insert, false, Some("saving...")),
             "saving..."
         );
     }
@@ -579,7 +587,7 @@ mod tests {
     #[test]
     fn composer_footer_uses_quit_hint_when_pending() {
         assert_eq!(
-            composer_footer_text(VimMode::Normal, true, None, None),
+            composer_footer_text(VimMode::Normal, true, None),
             "Press Esc again to quit"
         );
     }
@@ -597,9 +605,40 @@ mod tests {
     }
 
     #[test]
-    fn format_memo_list_row_keeps_time_and_applies_ellipsis_to_memo() {
-        let row = format_memo_list_row("2026-02-24 12:00:00", "abcdefghijklmnopqrstuvwxyz", 30);
-        assert!(row.starts_with("2026-02-24 12:00:00"));
-        assert!(row.ends_with("..."));
+    fn format_memo_list_row_uses_memo_text_only_with_ellipsis() {
+        let row = format_memo_list_row("abcdefghijklmnopqrstuvwxyz", 10);
+        assert_eq!(row, "abcdefg...");
+    }
+
+    #[test]
+    fn help_overlay_content_is_context_specific() {
+        let composer = help_overlay_content(HelpOverlayContext::ComposerNormal);
+        assert!(composer.contains("Composer NORMAL"));
+        assert!(composer.contains("W submit+quit on success"));
+
+        let memo_list = help_overlay_content(HelpOverlayContext::MemoList);
+        assert!(memo_list.contains("Memo List"));
+        assert!(memo_list.contains("Enter open selected memo"));
+    }
+
+    #[test]
+    fn memo_list_footer_prefers_status_message() {
+        assert_eq!(
+            memo_list_footer_text(Some("loading"), Some("2026-02-26 10:00:00")),
+            "loading"
+        );
+    }
+
+    #[test]
+    fn memo_list_footer_uses_selected_time_without_status() {
+        assert_eq!(
+            memo_list_footer_text(None, Some("2026-02-26 10:00:00")),
+            "2026-02-26 10:00:00"
+        );
+    }
+
+    #[test]
+    fn memo_list_footer_is_empty_without_status_or_selection() {
+        assert_eq!(memo_list_footer_text(None, None), "");
     }
 }

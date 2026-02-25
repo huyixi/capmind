@@ -21,7 +21,6 @@ use crate::supabase::{
 
 use super::chat_widget::{ChatWidget, WidgetAction};
 use super::render;
-use super::theme::{UiTheme, build_ui_theme, detect_terminal_palette};
 use super::types::MAX_HISTORY_ITEMS;
 
 const WQ_MAX_ATTEMPTS: usize = 3;
@@ -29,7 +28,6 @@ const WQ_MAX_ATTEMPTS: usize = 3;
 pub struct ComposeApp<'a> {
     client: &'a SupabaseClient,
     widget: ChatWidget,
-    theme: UiTheme,
 }
 
 enum BackgroundEvent {
@@ -54,12 +52,9 @@ enum EditSubmitSuccess {
 
 impl<'a> ComposeApp<'a> {
     pub fn new(client: &'a SupabaseClient) -> Self {
-        let palette = detect_terminal_palette();
-        let theme = build_ui_theme(palette);
         Self {
             client,
             widget: ChatWidget::new(),
-            theme,
         }
     }
 
@@ -79,7 +74,7 @@ impl<'a> ComposeApp<'a> {
                 break;
             }
 
-            terminal.draw(&mut self.widget, &self.theme)?;
+            terminal.draw(&mut self.widget)?;
 
             let has_event = event::poll(Duration::from_millis(120))
                 .map_err(|err| AppError::InvalidInput(format!("TUI poll failed: {err}")))?;
@@ -358,7 +353,7 @@ async fn run_wq_create_submission(
                 }
 
                 let _ = tx.send(BackgroundEvent::WqStatus(format!(
-                    ":wq attempt {attempt}/{WQ_MAX_ATTEMPTS} failed: {err}. Retrying..."
+                    "W attempt {attempt}/{WQ_MAX_ATTEMPTS} failed: {err}. Retrying..."
                 )));
                 sleep(wq_retry_delay(attempt)).await;
             }
@@ -394,7 +389,7 @@ async fn run_wq_edit_submission(
                 }
 
                 let _ = tx.send(BackgroundEvent::WqStatus(format!(
-                    ":wq attempt {attempt}/{WQ_MAX_ATTEMPTS} failed: {err}. Retrying..."
+                    "W attempt {attempt}/{WQ_MAX_ATTEMPTS} failed: {err}. Retrying..."
                 )));
                 sleep(wq_retry_delay(attempt)).await;
             }
@@ -462,9 +457,9 @@ impl TerminalSession {
         Ok(Self { terminal })
     }
 
-    fn draw(&mut self, widget: &mut ChatWidget, theme: &UiTheme) -> Result<(), AppError> {
+    fn draw(&mut self, widget: &mut ChatWidget) -> Result<(), AppError> {
         self.terminal
-            .draw(|frame| render::draw(frame, widget, theme))
+            .draw(|frame| render::draw(frame, widget))
             .map_err(|err| AppError::InvalidInput(format!("TUI draw failed: {err}")))?;
         Ok(())
     }
