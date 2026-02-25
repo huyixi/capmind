@@ -92,9 +92,9 @@ async fn run_self_update_with_config(
 
 fn platform_asset_name() -> Result<&'static str, AppError> {
     match std::env::consts::OS {
-        "linux" => Ok("cap-cli-Linux"),
-        "macos" => Ok("cap-cli-macOS"),
-        "windows" => Ok("cap-cli-Windows.exe"),
+        "linux" => Ok("cap-Linux"),
+        "macos" => Ok("cap-macOS"),
+        "windows" => Ok("cap-Windows.exe"),
         other => Err(AppError::Api(format!(
             "Self-update is not supported on this platform: {other}"
         ))),
@@ -438,21 +438,21 @@ mod tests {
     #[test]
     fn parse_expected_sha256_supports_common_formats() {
         let checksums = "\
-1111111111111111111111111111111111111111111111111111111111111111  cap-cli-Linux\n\
-2222222222222222222222222222222222222222222222222222222222222222  ./cap-cli-macOS\n\
-3333333333333333333333333333333333333333333333333333333333333333 *cap-cli-Windows.exe\n\
+1111111111111111111111111111111111111111111111111111111111111111  cap-Linux\n\
+2222222222222222222222222222222222222222222222222222222222222222  ./cap-macOS\n\
+3333333333333333333333333333333333333333333333333333333333333333 *cap-Windows.exe\n\
 ";
 
         assert_eq!(
-            parse_expected_sha256(checksums, "cap-cli-Linux").as_deref(),
+            parse_expected_sha256(checksums, "cap-Linux").as_deref(),
             Some("1111111111111111111111111111111111111111111111111111111111111111")
         );
         assert_eq!(
-            parse_expected_sha256(checksums, "cap-cli-macOS").as_deref(),
+            parse_expected_sha256(checksums, "cap-macOS").as_deref(),
             Some("2222222222222222222222222222222222222222222222222222222222222222")
         );
         assert_eq!(
-            parse_expected_sha256(checksums, "cap-cli-Windows.exe").as_deref(),
+            parse_expected_sha256(checksums, "cap-Windows.exe").as_deref(),
             Some("3333333333333333333333333333333333333333333333333333333333333333")
         );
     }

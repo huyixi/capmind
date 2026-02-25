@@ -44,9 +44,9 @@ Workflow file: `.github/workflows/cli-release.yml`
 
 - Builds on `ubuntu-latest`, `macos-latest`, and `windows-latest`
 - Produces binaries:
-  - `cap-cli-Linux`
-  - `cap-cli-macOS`
-  - `cap-cli-Windows.exe`
+  - `cap-Linux`
+  - `cap-macOS`
+  - `cap-Windows.exe`
 - On tag trigger (`cli-v*`), publishes a GitHub Release with generated notes
 - Generates and uploads `SHA256SUMS` for all release binaries
 
@@ -67,7 +67,7 @@ Do not reuse or move an existing release tag.
 ## Verify checksums after publish
 
 ```bash
-gh release download cli-v0.2.1 -p "cap-cli-*" -p "SHA256SUMS"
+gh release download cli-v0.2.1 -p "cap-*" -p "SHA256SUMS"
 sha256sum -c SHA256SUMS
 ```
 
