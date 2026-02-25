@@ -13,10 +13,19 @@ on:
 
 jobs:
   verify-db-security:
-    if: ${{ secrets.SUPABASE_DB_URL != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate required secret
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "SUPABASE_DB_URL is not configured."
+            echo "Set repository secret SUPABASE_DB_URL to enable db-security-check."
+            exit 1
+          fi
 
       - name: Ensure psql is installed
         run: |
@@ -30,12 +39,3 @@ jobs:
           PGSSLMODE: require
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/sql/security_checks.sql
-
-  missing-secret:
-    if: ${{ secrets.SUPABASE_DB_URL == '' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Secret not configured
-        run: |
-          echo "SUPABASE_DB_URL is not configured."
-          echo "Set repository secret SUPABASE_DB_URL to enable db-security-check."
