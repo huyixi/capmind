@@ -119,6 +119,24 @@ Shortcut scope is intentionally narrow: only a single positional text argument i
 echo "hello from stdin" | cargo run -- add
 ```
 
+### 6) Self-update with checksum verification
+
+Update to latest release:
+
+```bash
+cargo run -- self-update
+```
+
+Update to a specific version:
+
+```bash
+cargo run -- self-update --version 0.2.1
+```
+
+`self-update` downloads the platform binary and `SHA256SUMS` from GitHub Release,
+verifies SHA-256 before replacing the executable, and rolls back automatically if
+replacement fails.
+
 ## Auth/session behavior
 
 - CLI first attempts refresh-token login from `~/.capmind/auth.json`.
@@ -143,3 +161,7 @@ echo "hello from stdin" | cargo run -- add
   - Run `cargo run -- login` once.
 - `Insert memo failed (401/403...)`:
   - Check RLS policy for `memos` and ensure `user_id` matches `auth.uid()`.
+- `Self-update failed: checksum mismatch`:
+  - Ensure the release includes `SHA256SUMS` and the matching platform binary.
+- `Self-update failed: move current binary to backup`:
+  - Current executable path is not writable. Re-run with proper permissions.

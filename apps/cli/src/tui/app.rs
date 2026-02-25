@@ -337,7 +337,11 @@ impl<'a> ComposeApp<'a> {
         }
     }
 
-    fn start_submit_create_submission(&self, tx: UnboundedSender<BackgroundEvent>, normalized: String) {
+    fn start_submit_create_submission(
+        &self,
+        tx: UnboundedSender<BackgroundEvent>,
+        normalized: String,
+    ) {
         let client = (*self.client).clone();
         tokio::spawn(async move {
             let event = match submit_memo(&client, &normalized).await {

@@ -48,6 +48,7 @@ Workflow file: `.github/workflows/cli-release.yml`
   - `cap-cli-macOS`
   - `cap-cli-Windows.exe`
 - On tag trigger (`cli-v*`), publishes a GitHub Release with generated notes
+- Generates and uploads `SHA256SUMS` for all release binaries
 
 ## Manual trigger behavior
 
@@ -62,3 +63,16 @@ It does **not** publish a GitHub Release because publish job is tag-gated.
 4. Mark the broken release as deprecated in GitHub Release notes.
 
 Do not reuse or move an existing release tag.
+
+## Verify checksums after publish
+
+```bash
+gh release download cli-v0.2.1 -p "cap-cli-*" -p "SHA256SUMS"
+sha256sum -c SHA256SUMS
+```
+
+On macOS (if `sha256sum` is unavailable):
+
+```bash
+shasum -a 256 -c SHA256SUMS
+```

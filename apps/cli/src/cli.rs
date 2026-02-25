@@ -16,12 +16,22 @@ pub enum Commands {
     Login,
     Compose,
     List,
+    SelfUpdate(SelfUpdateArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct AddArgs {
     #[arg(long)]
     pub text: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SelfUpdateArgs {
+    #[arg(
+        long,
+        help = "Target version (for example 0.2.1). Defaults to latest release."
+    )]
+    pub version: Option<String>,
 }
 
 pub fn rewrite_shortcut_args<I>(args: I) -> Vec<String>
@@ -41,7 +51,10 @@ where
     if first.starts_with('-') {
         return argv;
     }
-    if matches!(first, "add" | "login" | "help" | "compose" | "list") {
+    if matches!(
+        first,
+        "add" | "login" | "help" | "compose" | "list" | "self-update"
+    ) {
         return argv;
     }
 
@@ -157,6 +170,13 @@ mod tests {
         let input = vec!["cap".to_string(), "list".to_string()];
         let output = rewrite_shortcut_args(input);
         assert_eq!(output, vec!["cap", "list"]);
+    }
+
+    #[test]
+    fn does_not_rewrite_self_update_subcommand() {
+        let input = vec!["cap".to_string(), "self-update".to_string()];
+        let output = rewrite_shortcut_args(input);
+        assert_eq!(output, vec!["cap", "self-update"]);
     }
 
     #[test]
