@@ -63,7 +63,11 @@ pnpm run fmt:cli
   - `SUPABASE_ANON_KEY`
 - Web auto-maps these to `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` when missing.
 - CI secret for DB security checks:
-  - `SUPABASE_DB_URL` (Postgres connection string to target Supabase DB; SSL required)
+  - `SUPABASE_DB_HOST` (for example `db.<project-ref>.supabase.co`)
+  - `SUPABASE_DB_USER` (for example `postgres`)
+  - `SUPABASE_DB_PASSWORD` (database password)
+  - Optional: `SUPABASE_DB_PORT` (defaults to `5432`)
+  - Optional: `SUPABASE_DB_NAME` (defaults to `postgres`)
 
 ## CI
 
