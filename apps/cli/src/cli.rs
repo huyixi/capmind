@@ -15,6 +15,7 @@ pub enum Commands {
     Add(AddArgs),
     Login,
     Compose,
+    List,
 }
 
 #[derive(Debug, Args)]
@@ -40,7 +41,7 @@ where
     if first.starts_with('-') {
         return argv;
     }
-    if matches!(first, "add" | "login" | "help" | "compose") {
+    if matches!(first, "add" | "login" | "help" | "compose" | "list") {
         return argv;
     }
 
@@ -149,6 +150,13 @@ mod tests {
         let input = vec!["cap".to_string(), "login".to_string()];
         let output = rewrite_shortcut_args(input);
         assert_eq!(output, vec!["cap", "login"]);
+    }
+
+    #[test]
+    fn does_not_rewrite_list_subcommand() {
+        let input = vec!["cap".to_string(), "list".to_string()];
+        let output = rewrite_shortcut_args(input);
+        assert_eq!(output, vec!["cap", "list"]);
     }
 
     #[test]

@@ -19,7 +19,6 @@ pub struct Composer {
     lines: Vec<String>,
     cursor_row: usize,
     cursor_col: usize,
-    scroll_y: u16,
     mode: VimMode,
     pending_delete_line: bool,
 }
@@ -36,7 +35,6 @@ impl Composer {
             lines: vec![String::new()],
             cursor_row: 0,
             cursor_col: 0,
-            scroll_y: 0,
             mode: VimMode::Insert,
             pending_delete_line: false,
         }
@@ -47,7 +45,6 @@ impl Composer {
         self.lines.push(String::new());
         self.cursor_row = 0;
         self.cursor_col = 0;
-        self.scroll_y = 0;
         self.mode = VimMode::Insert;
         self.pending_delete_line = false;
     }
@@ -64,7 +61,6 @@ impl Composer {
         };
         self.cursor_row = self.lines.len().saturating_sub(1);
         self.cursor_col = line_len_chars(&self.lines[self.cursor_row]);
-        self.scroll_y = 0;
         self.mode = VimMode::Insert;
         self.pending_delete_line = false;
     }
@@ -83,10 +79,6 @@ impl Composer {
         display_col_for_char_idx(line, self.cursor_col)
     }
 
-    pub fn scroll_y(&self) -> u16 {
-        self.scroll_y
-    }
-
     pub fn lines(&self) -> &[String] {
         &self.lines
     }
@@ -99,21 +91,9 @@ impl Composer {
         self.mode == VimMode::Insert
     }
 
-    pub fn ensure_cursor_visible(&mut self, viewport_height: u16) {
-        if viewport_height == 0 {
-            return;
-        }
-        let row = self.cursor_row as u16;
-        if row < self.scroll_y {
-            self.scroll_y = row;
-            return;
-        }
-        let bottom = self
-            .scroll_y
-            .saturating_add(viewport_height.saturating_sub(1));
-        if row > bottom {
-            self.scroll_y = row.saturating_sub(viewport_height.saturating_sub(1));
-        }
+    pub fn switch_to_insert_mode(&mut self) {
+        self.mode = VimMode::Insert;
+        self.pending_delete_line = false;
     }
 
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> ComposerAction {

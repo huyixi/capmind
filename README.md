@@ -62,12 +62,15 @@ pnpm run fmt:cli
   - `SUPABASE_URL`
   - `SUPABASE_ANON_KEY`
 - Web auto-maps these to `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` when missing.
+- CI secret for DB security checks:
+  - `SUPABASE_DB_URL` (Postgres connection string to target Supabase DB; SSL required)
 
 ## CI
 
 - `web-ci`: path-scoped workflow for `apps/web/**`
 - `cli-ci`: path-scoped workflow for `apps/cli/**`
 - `cli-release`: independent CLI release workflow (manual or push tag `cli-v*`)
+- `db-security-check`: validates Supabase RLS/policies/privileges for memo isolation (`supabase/**`)
 
 ## Release docs
 
