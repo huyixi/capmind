@@ -37,7 +37,6 @@ jobs:
             echo "Set repository secrets SUPABASE_DB_HOST, SUPABASE_DB_USER, SUPABASE_DB_PASSWORD."
             exit 1
           fi
-
       - name: Ensure psql is installed
         run: |
           if ! command -v psql >/dev/null 2>&1; then
