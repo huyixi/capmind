@@ -472,14 +472,14 @@ fn compute_split_layout(area: Rect) -> FloatingLayout {
     let history_height = HISTORY_FIXED_HEIGHT.min(usable_height.saturating_sub(1));
     let composer_height = usable_height.saturating_sub(history_height);
 
-    let inset = COMPOSER_H_INSET.min(area.width.saturating_sub(1) / 2);
+    let inset = COMPOSER_H_INSET;
     let composer = Rect {
         x: area.x.saturating_add(inset),
         y: area.y,
         width: area.width.saturating_sub(inset.saturating_mul(2)),
         height: composer_height,
     };
-    let input_pad_x = COMPOSER_INNER_PADDING_X.min(composer.width.saturating_sub(1) / 2);
+    let input_pad_x = COMPOSER_INNER_PADDING_X;
     let input_pad_top = COMPOSER_INNER_PADDING_TOP.min(composer.height.saturating_sub(1));
     let input_pad_bottom = COMPOSER_INNER_PADDING_BOTTOM.min(
         composer
@@ -512,7 +512,7 @@ fn compute_split_layout(area: Rect) -> FloatingLayout {
 
 fn compute_composer_only_layout(area: Rect) -> FloatingLayout {
     let composer = area;
-    let input_pad_x = COMPOSER_INNER_PADDING_X.min(composer.width.saturating_sub(1) / 2);
+    let input_pad_x = COMPOSER_INNER_PADDING_X;
     let input_pad_top = COMPOSER_INNER_PADDING_TOP.min(composer.height.saturating_sub(1));
     let input_pad_bottom = COMPOSER_INNER_PADDING_BOTTOM.min(
         composer
