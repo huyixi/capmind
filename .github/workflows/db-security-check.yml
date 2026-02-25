@@ -1,0 +1,41 @@
+name: db-security-check
+
+on:
+  push:
+    paths:
+      - "supabase/**"
+      - ".github/workflows/db-security-check.yml"
+  pull_request:
+    paths:
+      - "supabase/**"
+      - ".github/workflows/db-security-check.yml"
+  workflow_dispatch:
+
+jobs:
+  verify-db-security:
+    if: ${{ secrets.SUPABASE_DB_URL != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure psql is installed
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Run DB security checks
+        env:
+          PGSSLMODE: require
+          DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/sql/security_checks.sql
+
+  missing-secret:
+    if: ${{ secrets.SUPABASE_DB_URL == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Secret not configured
+        run: |
+          echo "SUPABASE_DB_URL is not configured."
+          echo "Set repository secret SUPABASE_DB_URL to enable db-security-check."

@@ -32,6 +32,15 @@ pub struct ComposeApp<'a> {
 
 enum BackgroundEvent {
     HistoryLoaded(Vec<RecentMemo>),
+    SubmitCreateSuccess {
+        normalized_text: String,
+        inserted: InsertedMemo,
+    },
+    SubmitEditSuccess(EditSubmitSuccess),
+    SubmitFailed {
+        normalized_text: String,
+        message: String,
+    },
     WqStatus(String),
     WqCreateSuccess {
         normalized_text: String,
@@ -95,15 +104,14 @@ impl<'a> ComposeApp<'a> {
                     self.handle_refresh_history().await;
                 }
                 WidgetAction::SubmitCreate(text) => {
-                    self.handle_submit_create(text).await;
+                    self.handle_submit_create(background_tx.clone(), text);
                 }
                 WidgetAction::SubmitEdit {
                     memo_id,
                     expected_version,
                     text,
                 } => {
-                    self.handle_submit_edit(memo_id, expected_version, text)
-                        .await;
+                    self.handle_submit_edit(background_tx.clone(), memo_id, expected_version, text);
                 }
                 WidgetAction::SubmitCreateBeforeQuit(text) => {
                     self.start_wq_create_submission(background_tx.clone(), text);
@@ -176,6 +184,36 @@ impl<'a> ComposeApp<'a> {
                 BackgroundEvent::HistoryLoaded(memos) => {
                     self.widget.hydrate_history_from_memos(memos);
                 }
+                BackgroundEvent::SubmitCreateSuccess {
+                    normalized_text,
+                    inserted,
+                } => {
+                    self.widget.on_submit_success(
+                        &normalized_text,
+                        &inserted.id,
+                        &inserted.created_at,
+                        &inserted.version,
+                    );
+                }
+                BackgroundEvent::SubmitEditSuccess(success) => match success {
+                    EditSubmitSuccess::Updated(updated_memo) => {
+                        self.widget.on_edit_success(&updated_memo);
+                    }
+                    EditSubmitSuccess::Conflict {
+                        server_memo,
+                        submitted_text,
+                        forked,
+                    } => {
+                        self.widget
+                            .on_edit_conflict(&server_memo, &submitted_text, &forked);
+                    }
+                },
+                BackgroundEvent::SubmitFailed {
+                    normalized_text,
+                    message,
+                } => {
+                    self.widget.on_submit_error(&normalized_text, &message);
+                }
                 BackgroundEvent::WqStatus(message) => {
                     self.widget.on_wq_submission_status(&message);
                 }
@@ -216,7 +254,7 @@ impl<'a> ComposeApp<'a> {
         should_quit
     }
 
-    async fn handle_submit_create(&mut self, text: String) {
+    fn handle_submit_create(&mut self, tx: UnboundedSender<BackgroundEvent>, text: String) {
         let normalized = match resolve_text(Some(text.clone())) {
             Ok(value) => value,
             Err(err) => {
@@ -225,23 +263,13 @@ impl<'a> ComposeApp<'a> {
             }
         };
 
-        match submit_memo(self.client, &normalized).await {
-            Ok(result) => {
-                self.widget.on_submit_success(
-                    &normalized,
-                    &result.inserted.id,
-                    &result.inserted.created_at,
-                    &result.inserted.version,
-                );
-            }
-            Err(err) => {
-                self.widget.on_submit_error(&normalized, &err.to_string());
-            }
-        }
+        self.widget.on_submit_started();
+        self.start_submit_create_submission(tx, normalized);
     }
 
-    async fn handle_submit_edit(
+    fn handle_submit_edit(
         &mut self,
+        tx: UnboundedSender<BackgroundEvent>,
         memo_id: String,
         expected_version: String,
         text: String,
@@ -254,22 +282,8 @@ impl<'a> ComposeApp<'a> {
             }
         };
 
-        match submit_edit_once(self.client, &memo_id, &expected_version, &normalized).await {
-            Ok(EditSubmitSuccess::Updated(updated_memo)) => {
-                self.widget.on_edit_success(&updated_memo);
-            }
-            Ok(EditSubmitSuccess::Conflict {
-                server_memo,
-                submitted_text,
-                forked,
-            }) => {
-                self.widget
-                    .on_edit_conflict(&server_memo, &submitted_text, &forked);
-            }
-            Err(err) => {
-                self.widget.on_submit_error(&normalized, &err.to_string());
-            }
-        }
+        self.widget.on_submit_started();
+        self.start_submit_edit_submission(tx, memo_id, expected_version, normalized);
     }
 
     async fn handle_delete_memo(&mut self, memo_id: String, expected_version: String) {
@@ -321,6 +335,45 @@ impl<'a> ComposeApp<'a> {
                 .widget
                 .on_validation_error(&format!("Refresh memo list failed: {err}")),
         }
+    }
+
+    fn start_submit_create_submission(&self, tx: UnboundedSender<BackgroundEvent>, normalized: String) {
+        let client = (*self.client).clone();
+        tokio::spawn(async move {
+            let event = match submit_memo(&client, &normalized).await {
+                Ok(result) => BackgroundEvent::SubmitCreateSuccess {
+                    normalized_text: normalized,
+                    inserted: result.inserted,
+                },
+                Err(err) => BackgroundEvent::SubmitFailed {
+                    normalized_text: normalized,
+                    message: err.to_string(),
+                },
+            };
+            // Local channel send cannot fail in normal run loop, ignore if UI already closed.
+            let _ = tx.send(event);
+        });
+    }
+
+    fn start_submit_edit_submission(
+        &self,
+        tx: UnboundedSender<BackgroundEvent>,
+        memo_id: String,
+        expected_version: String,
+        normalized: String,
+    ) {
+        let client = (*self.client).clone();
+        tokio::spawn(async move {
+            let event =
+                match submit_edit_once(&client, &memo_id, &expected_version, &normalized).await {
+                    Ok(success) => BackgroundEvent::SubmitEditSuccess(success),
+                    Err(err) => BackgroundEvent::SubmitFailed {
+                        normalized_text: normalized,
+                        message: err.to_string(),
+                    },
+                };
+            let _ = tx.send(event);
+        });
     }
 }
 

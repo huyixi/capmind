@@ -280,6 +280,11 @@ impl ChatWidget {
         self.show_submit_success_tip();
     }
 
+    pub fn on_submit_started(&mut self) {
+        self.reset_composer_state();
+        self.set_status_message("Submitting...".to_string());
+    }
+
     pub fn on_edit_success(&mut self, updated_memo: &RecentMemo) {
         self.on_wq_submission_succeeded();
         self.upsert_history_memo(updated_memo);
@@ -584,12 +589,12 @@ impl ChatWidget {
             }
             KeyCode::Esc => {
                 self.wq_failure_prompt = None;
-                self.set_status_message("Continue editing. Use w to retry.".to_string());
+                self.set_status_message("Continue editing. Use w/s to retry.".to_string());
                 WidgetAction::None
             }
             KeyCode::Char(c) if c.eq_ignore_ascii_case(&'c') || c.eq_ignore_ascii_case(&'n') => {
                 self.wq_failure_prompt = None;
-                self.set_status_message("Continue editing. Use w to retry.".to_string());
+                self.set_status_message("Continue editing. Use w/s to retry.".to_string());
                 WidgetAction::None
             }
             _ => WidgetAction::None,
@@ -634,11 +639,11 @@ impl ChatWidget {
                 self.help_overlay = Some(HelpOverlayContext::ComposerNormal);
                 WidgetAction::None
             }
-            'w' => self.build_submit_action(false),
+            'w' | 's' => self.build_submit_action(false),
             'W' => self.build_submit_action(true),
             'q' => {
                 if self.composer_dirty {
-                    self.set_status_message("Unsaved changes. Use w, W, or Q.".to_string());
+                    self.set_status_message("Unsaved changes. Use w/s, W, or Q.".to_string());
                     WidgetAction::None
                 } else {
                     WidgetAction::Quit
@@ -857,10 +862,7 @@ impl ChatWidget {
     }
 
     fn show_submit_success_tip(&mut self) {
-        self.set_temporary_status_message(
-            "Submitted successfully.".to_string(),
-            SUBMIT_SUCCESS_TIP_DURATION,
-        );
+        self.set_temporary_status_message("Submitted.".to_string(), SUBMIT_SUCCESS_TIP_DURATION);
     }
 
     fn refresh_composer_dirty_state(&mut self) {
@@ -1044,6 +1046,48 @@ mod tests {
     }
 
     #[test]
+    fn command_s_submits_in_create_mode() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('h')));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(key(KeyCode::Char('s')));
+        assert_eq!(action, WidgetAction::SubmitCreate("h".to_string()));
+    }
+
+    #[test]
+    fn command_s_submits_in_edit_mode() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![memo("memo-1", "memo-1", "7")]);
+        open_split_list(&mut widget);
+        widget.handle_key_event(key(KeyCode::Tab));
+        widget.handle_key_event(key(KeyCode::Enter));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(key(KeyCode::Char('s')));
+        assert_eq!(
+            action,
+            WidgetAction::SubmitEdit {
+                memo_id: "memo-1".to_string(),
+                expected_version: "7".to_string(),
+                text: "memo-1".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn command_shift_s_is_not_submit_alias() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('h')));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(shift_char('S'));
+        assert_eq!(action, WidgetAction::None);
+        assert!(!widget.wq_submission_in_progress());
+        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "h");
+    }
+
+    #[test]
     fn command_q_blocks_when_dirty() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Char('h')));
@@ -1054,7 +1098,7 @@ mod tests {
         assert_eq!(action, WidgetAction::None);
         assert_eq!(
             widget.status_message(),
-            Some("Unsaved changes. Use w, W, or Q.")
+            Some("Unsaved changes. Use w/s, W, or Q.")
         );
     }
 

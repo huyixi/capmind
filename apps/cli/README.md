@@ -57,7 +57,7 @@ TUI keys:
 - `Esc` in `NORMAL` (or outside Composer insert mode): press twice to quit TUI (with confirmation)
 - `NORMAL` mode navigation/edit keys: arrows, `h`/`j`/`k`/`l`, `b`, `0`, `$`, `i`/`a`/`I`/`A`/`o`/`O`, `x`, `dd`
 - `NORMAL` mode direct commands (no `:`):
-  - `w`: submit and stay
+  - `w`/`s`: submit and stay
   - `W`: submit in background (up to 3 attempts, retry delays `1s`, `3s`) and quit on success
   - `q`: quit only if no unsaved changes
   - `Q`: quit without submit

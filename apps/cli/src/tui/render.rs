@@ -2,6 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use super::chat_widget::{ChatWidget, HelpOverlayContext, PageMode};
 use super::composer::VimMode;
@@ -203,13 +204,17 @@ fn render_composer(
     let is_editing_memo = widget.is_editing_memo();
 
     let composer = widget.bottom_pane_mut().composer_mut();
-    composer.ensure_cursor_visible(input_area.height);
     let text = composer.lines().join("\n");
     let (display_text, is_placeholder) = composer_display_text(&text, is_editing_memo);
-    let cursor_row_abs = composer.cursor_row();
-    let cursor_row = cursor_row_abs.saturating_sub(composer.scroll_y() as usize) as u16;
     let raw_cursor_col = composer.cursor_display_col().min(u16::MAX as usize) as u16;
-    let horizontal_scroll = calculate_horizontal_scroll(raw_cursor_col, input_area.width);
+    let (cursor_row_abs, cursor_col) = calculate_wrapped_cursor_position(
+        composer.lines(),
+        composer.cursor_row(),
+        raw_cursor_col,
+        input_area.width,
+    );
+    let vertical_scroll = calculate_vertical_scroll(cursor_row_abs, input_area.height);
+    let cursor_row = cursor_row_abs.saturating_sub(vertical_scroll);
     let paragraph_style = if is_placeholder {
         text_style.add_modifier(Modifier::DIM)
     } else {
@@ -217,7 +222,8 @@ fn render_composer(
     };
     let paragraph = Paragraph::new(display_text)
         .style(paragraph_style)
-        .scroll((composer.scroll_y(), horizontal_scroll));
+        .wrap(Wrap { trim: false })
+        .scroll((vertical_scroll, 0));
     frame.render_widget(paragraph, input_area);
 
     let footer = composer_footer_text(
@@ -239,9 +245,7 @@ fn render_composer(
         let row = cursor_row;
         if row < input_area.height {
             let max_col = input_area.width.saturating_sub(1);
-            let col = raw_cursor_col
-                .saturating_sub(horizontal_scroll)
-                .min(max_col);
+            let col = cursor_col.min(max_col);
             let x = input_area.x.saturating_add(col);
             let y = input_area.y.saturating_add(row);
             frame.set_cursor_position((x, y));
@@ -267,8 +271,49 @@ fn composer_footer_text(
     }
 }
 
-fn calculate_horizontal_scroll(cursor_col: u16, viewport_width: u16) -> u16 {
-    cursor_col.saturating_sub(viewport_width.saturating_sub(1))
+fn calculate_wrapped_cursor_position(
+    lines: &[String],
+    cursor_row: usize,
+    cursor_col: u16,
+    viewport_width: u16,
+) -> (u16, u16) {
+    if viewport_width == 0 {
+        return (0, 0);
+    }
+
+    let width = viewport_width as usize;
+    let mut visual_row_abs: u16 = 0;
+    let safe_cursor_row = cursor_row.min(lines.len().saturating_sub(1));
+    for line in lines.iter().take(safe_cursor_row) {
+        let line_width = UnicodeWidthStr::width(line.as_str());
+        visual_row_abs = visual_row_abs.saturating_add(wrapped_line_count(line_width, width));
+    }
+
+    let cursor_col_usize = cursor_col as usize;
+    let wrapped_row_offset = (cursor_col_usize / width).min(u16::MAX as usize) as u16;
+    let wrapped_col = (cursor_col_usize % width) as u16;
+    (
+        visual_row_abs.saturating_add(wrapped_row_offset),
+        wrapped_col,
+    )
+}
+
+fn wrapped_line_count(line_width: usize, viewport_width: usize) -> u16 {
+    if viewport_width == 0 {
+        return 0;
+    }
+    if line_width == 0 {
+        return 1;
+    }
+    line_width
+        .saturating_sub(1)
+        .saturating_div(viewport_width)
+        .saturating_add(1)
+        .min(u16::MAX as usize) as u16
+}
+
+fn calculate_vertical_scroll(cursor_row: u16, viewport_height: u16) -> u16 {
+    cursor_row.saturating_sub(viewport_height.saturating_sub(1))
 }
 
 fn composer_display_text(text: &str, is_editing_memo: bool) -> (String, bool) {
@@ -353,7 +398,7 @@ fn help_overlay_content(context: HelpOverlayContext) -> &'static str {
     match context {
         HelpOverlayContext::ComposerNormal => {
             "Composer NORMAL\n\
-w submit | W submit+quit on success\n\
+w/s submit | W submit+quit on success\n\
 q quit if clean | Q force quit\n\
 l open memo list | p toggle split list\n\
 h/j/k/l move | b 0 $ | x dd edit\n\
@@ -499,9 +544,9 @@ fn compute_composer_only_layout(area: Rect) -> FloatingLayout {
 #[cfg(test)]
 mod tests {
     use super::{
-        calculate_horizontal_scroll, composer_display_text, composer_footer_text,
-        compute_composer_only_layout, compute_split_layout, format_memo_list_row,
-        help_overlay_content, memo_list_footer_text, truncate_with_ellipsis,
+        calculate_vertical_scroll, calculate_wrapped_cursor_position, composer_display_text,
+        composer_footer_text, compute_composer_only_layout, compute_split_layout,
+        format_memo_list_row, help_overlay_content, memo_list_footer_text, truncate_with_ellipsis,
     };
     use crate::tui::chat_widget::HelpOverlayContext;
     use crate::tui::composer::VimMode;
@@ -593,9 +638,22 @@ mod tests {
     }
 
     #[test]
-    fn calculate_horizontal_scroll_uses_display_width_cursor() {
-        assert_eq!(calculate_horizontal_scroll(4, 3), 2);
-        assert_eq!(calculate_horizontal_scroll(2, 3), 0);
+    fn calculate_wrapped_cursor_position_wraps_long_line() {
+        let lines = vec!["abcdef".to_string()];
+        assert_eq!(calculate_wrapped_cursor_position(&lines, 0, 5, 4), (1, 1));
+        assert_eq!(calculate_wrapped_cursor_position(&lines, 0, 3, 4), (0, 3));
+    }
+
+    #[test]
+    fn calculate_wrapped_cursor_position_counts_previous_rows() {
+        let lines = vec!["abcde".to_string(), "xy".to_string()];
+        assert_eq!(calculate_wrapped_cursor_position(&lines, 1, 1, 4), (2, 1));
+    }
+
+    #[test]
+    fn calculate_vertical_scroll_keeps_cursor_visible() {
+        assert_eq!(calculate_vertical_scroll(4, 3), 2);
+        assert_eq!(calculate_vertical_scroll(1, 3), 0);
     }
 
     #[test]
@@ -614,6 +672,7 @@ mod tests {
     fn help_overlay_content_is_context_specific() {
         let composer = help_overlay_content(HelpOverlayContext::ComposerNormal);
         assert!(composer.contains("Composer NORMAL"));
+        assert!(composer.contains("w/s submit"));
         assert!(composer.contains("W submit+quit on success"));
 
         let memo_list = help_overlay_content(HelpOverlayContext::MemoList);
