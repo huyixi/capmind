@@ -13,11 +13,30 @@ on:
 
 jobs:
   verify-db-security:
-    if: ${{ secrets.SUPABASE_DB_URL != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate required DB secrets
+        env:
+          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
+          PGUSER: ${{ secrets.SUPABASE_DB_USER }}
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
+        run: |
+          missing=0
+          for var_name in PGHOST PGUSER PGPASSWORD; do
+            if [ -z "${!var_name}" ]; then
+              echo "::error::${var_name} is not configured."
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            echo "Set repository secrets SUPABASE_DB_HOST, SUPABASE_DB_USER, SUPABASE_DB_PASSWORD."
+            exit 1
+          fi
       - name: Ensure psql is installed
         run: |
           if ! command -v psql >/dev/null 2>&1; then
@@ -28,14 +47,18 @@ jobs:
       - name: Run DB security checks
         env:
           PGSSLMODE: require
-          DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/sql/security_checks.sql
-
-  missing-secret:
-    if: ${{ secrets.SUPABASE_DB_URL == '' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Secret not configured
+          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
+          PGUSER: ${{ secrets.SUPABASE_DB_USER }}
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
         run: |
-          echo "SUPABASE_DB_URL is not configured."
-          echo "Set repository secret SUPABASE_DB_URL to enable db-security-check."
+          : "${PGPORT:=5432}"
+          : "${PGDATABASE:=postgres}"
+          psql \
+            -h "$PGHOST" \
+            -p "$PGPORT" \
+            -U "$PGUSER" \
+            -d "$PGDATABASE" \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/sql/security_checks.sql
