@@ -87,10 +87,31 @@ Workflow file: `.github/workflows/cli-release.yml`
 - On tag trigger (`cli-v*`), publishes a GitHub Release with generated notes
 - Generates and uploads `SHA256SUMS` for all release binaries
 
+Homebrew tap sync workflow: `.github/workflows/cli-homebrew-tap-sync.yml`
+
+- Trigger:
+  - `push` tag `cli-v*` (primary trigger)
+  - `release.published` (compatible trigger)
+  - `workflow_dispatch` (manual)
+- Downloads release assets (`cap-*`) and computes SHA-256
+- Clones tap repo and updates formula `version`, `url`, and `sha256`
+- Commits and pushes formula update to tap repo
+
+Required repository settings in this repo:
+
+- Secret: `HOMEBREW_TAP_TOKEN`
+  - Personal access token with write access to the tap repo
+- Variable: `HOMEBREW_TAP_REPO`
+  - Example: `huyixi/homebrew-tap`
+- Variable: `HOMEBREW_FORMULA_PATH`
+  - Example: `Formula/cap.rb`
+
 ## Manual trigger behavior
 
-`workflow_dispatch` runs build and artifact upload only.
+For `cli-release` workflow, `workflow_dispatch` runs build and artifact upload only.
 It does **not** publish a GitHub Release because publish job is tag-gated.
+
+You can run the tap sync workflow manually via `workflow_dispatch` when needed.
 
 ## Rollback / hotfix
 

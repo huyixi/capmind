@@ -1,0 +1,222 @@
+name: cli-homebrew-tap-sync
+
+on:
+  push:
+    tags:
+      - "cli-v*"
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (for example: cli-v0.2.6)"
+        required: true
+        type: string
+      tap_repo:
+        description: "Tap repo (owner/name). Optional; defaults to repo variable."
+        required: false
+        type: string
+      formula_path:
+        description: "Formula path in tap repo. Optional; defaults to repo variable."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sync-homebrew-tap:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       startsWith(github.ref_name, 'cli-v')) ||
+      (github.event_name == 'release' &&
+       startsWith(github.event.release.tag_name, 'cli-v') &&
+       github.event.release.draft == false &&
+       github.event.release.prerelease == false)
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
+      TAP_REPO: ${{ github.event_name == 'workflow_dispatch' && inputs.tap_repo || vars.HOMEBREW_TAP_REPO }}
+      FORMULA_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.formula_path || vars.HOMEBREW_FORMULA_PATH }}
+
+    steps:
+      - name: Validate config
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RELEASE_TAG:-}" ]; then
+            echo "::error::Release tag is empty."
+            exit 1
+          fi
+
+          if [[ "${RELEASE_TAG}" != cli-v* ]]; then
+            echo "::error::Release tag must start with cli-v. Got: ${RELEASE_TAG}"
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.HOMEBREW_TAP_TOKEN }}" ]; then
+            echo "::error::Missing secret HOMEBREW_TAP_TOKEN"
+            exit 1
+          fi
+
+          if [ -z "${TAP_REPO:-}" ]; then
+            TAP_REPO="${GITHUB_REPOSITORY_OWNER}/homebrew-tap"
+          fi
+
+          if [ -z "${FORMULA_PATH:-}" ]; then
+            FORMULA_PATH="Formula/cap.rb"
+          fi
+
+          echo "TAP_REPO=${TAP_REPO}" >> "${GITHUB_ENV}"
+          echo "FORMULA_PATH=${FORMULA_PATH}" >> "${GITHUB_ENV}"
+          echo "RELEASE_VERSION=${RELEASE_TAG#cli-v}" >> "${GITHUB_ENV}"
+
+      - name: Download release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ready=0
+          for i in $(seq 1 40); do
+            if gh release view "${RELEASE_TAG}" --repo "${SOURCE_REPO}" >/dev/null 2>&1; then
+              assets_count=$(gh release view "${RELEASE_TAG}" --repo "${SOURCE_REPO}" --json assets --jq '.assets | length')
+              if [ "${assets_count}" -gt 0 ]; then
+                ready=1
+                echo "Release ${RELEASE_TAG} is ready with ${assets_count} assets."
+                break
+              fi
+              echo "Release ${RELEASE_TAG} exists but assets are not ready (${i}/40). Waiting..."
+            else
+              echo "Release ${RELEASE_TAG} not ready yet (${i}/40). Waiting..."
+            fi
+            sleep 15
+          done
+
+          if [ "${ready}" -ne 1 ]; then
+            echo "::error::Release ${RELEASE_TAG} was not ready in time."
+            exit 1
+          fi
+
+          mkdir -p release
+          gh release download "${RELEASE_TAG}" \
+            --repo "${SOURCE_REPO}" \
+            --dir release \
+            --pattern "cap-*"
+          if ! ls release/cap-* >/dev/null 2>&1; then
+            echo "::error::No cap-* assets found in release ${RELEASE_TAG}."
+            exit 1
+          fi
+
+      - name: Build SHA256 map
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum cap-* > SHA256SUMS.generated
+          cat SHA256SUMS.generated
+
+      - name: Clone tap repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${{ secrets.HOMEBREW_TAP_TOKEN }}@github.com/${TAP_REPO}.git" tap
+
+      - name: Update formula
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+          import sys
+
+          release_tag = os.environ["RELEASE_TAG"]
+          release_version = os.environ["RELEASE_VERSION"]
+          formula_rel = os.environ["FORMULA_PATH"]
+          formula_path = pathlib.Path("tap") / formula_rel
+
+          if not formula_path.exists():
+              print(f"::error::Formula file not found: {formula_path}")
+              sys.exit(1)
+
+          sha_map = {}
+          with open("release/SHA256SUMS.generated", "r", encoding="utf-8") as fh:
+              for raw in fh:
+                  line = raw.strip()
+                  if not line:
+                      continue
+                  digest, filename = line.split(maxsplit=1)
+                  sha_map[filename] = digest
+
+          original = formula_path.read_text(encoding="utf-8")
+          lines = original.splitlines()
+
+          version_re = re.compile(r'^(\s*version\s+")([^"]+)(".*)$')
+          url_re = re.compile(r'^(\s*url\s+")([^"]*/releases/download/)([^/]+)(/([^"/]+))(".*)$')
+          sha_re = re.compile(r'^(\s*sha256\s+")[0-9a-f]{64}(".*)$')
+
+          version_updates = 0
+          url_updates = 0
+          sha_updates = 0
+
+          for i, line in enumerate(lines):
+              vm = version_re.match(line)
+              if vm and version_updates == 0:
+                  lines[i] = f'{vm.group(1)}{release_version}{vm.group(3)}'
+                  version_updates += 1
+
+              um = url_re.match(lines[i])
+              if not um:
+                  continue
+
+              prefix, download_prefix, _old_tag, slash_filename, filename, suffix = um.groups()
+              if filename not in sha_map:
+                  continue
+
+              lines[i] = f'{prefix}{download_prefix}{release_tag}{slash_filename}{suffix}'
+              url_updates += 1
+
+              for j in range(i + 1, min(i + 8, len(lines))):
+                  sm = sha_re.match(lines[j])
+                  if sm:
+                      lines[j] = f'{sm.group(1)}{sha_map[filename]}{sm.group(2)}'
+                      sha_updates += 1
+                      break
+
+          if url_updates == 0:
+              print("::error::No formula URL entries were updated. Check formula URL format and asset names.")
+              sys.exit(1)
+
+          if sha_updates == 0:
+              print("::error::No formula sha256 entries were updated. Check formula layout.")
+              sys.exit(1)
+
+          updated = "\n".join(lines) + ("\n" if original.endswith("\n") else "")
+          formula_path.write_text(updated, encoding="utf-8")
+
+          print(f"Updated formula: {formula_rel}")
+          print(f"version_updates={version_updates}, url_updates={url_updates}, sha_updates={sha_updates}")
+          PY
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd tap
+
+          if git diff --quiet -- "${FORMULA_PATH}"; then
+            echo "No formula changes detected; skipping push."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add "${FORMULA_PATH}"
+          git commit -m "chore(formula): sync ${RELEASE_TAG}"
+          git push origin HEAD
