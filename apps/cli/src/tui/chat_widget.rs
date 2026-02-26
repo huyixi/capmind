@@ -8,7 +8,7 @@ use crate::supabase::{InsertedMemo, RecentMemo};
 
 use super::bottom_pane::{BottomPane, InputResult};
 use super::composer::VimMode;
-use super::types::{FocusArea, HistoryCell, MAX_HISTORY_ITEMS};
+use super::types::{FocusArea, HistoryCell};
 
 const SUBMIT_SUCCESS_TIP_DURATION: Duration = Duration::from_secs(1);
 
@@ -380,12 +380,8 @@ impl ChatWidget {
             if memo.deleted_at.is_some() {
                 continue;
             }
-            let text = memo.text.trim().to_string();
-            if text.is_empty() {
-                continue;
-            }
             self.push_history_memo(
-                text,
+                memo.text,
                 parse_timestamp(&memo.created_at).unwrap_or_else(Utc::now),
                 memo.id,
                 memo.version,
@@ -406,12 +402,8 @@ impl ChatWidget {
             if memo.deleted_at.is_some() {
                 continue;
             }
-            let text = memo.text.trim().to_string();
-            if text.is_empty() {
-                continue;
-            }
             self.push_history_memo(
-                text,
+                memo.text,
                 parse_timestamp(&memo.created_at).unwrap_or_else(Utc::now),
                 memo.id,
                 memo.version,
@@ -544,6 +536,11 @@ impl ChatWidget {
             {
                 self.return_to_composer_insert_mode();
                 WidgetAction::None
+            }
+            KeyCode::Char(c)
+                if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'r') =>
+            {
+                WidgetAction::RefreshHistory
             }
             KeyCode::Char(c) if c.eq_ignore_ascii_case(&'d') => {
                 self.start_delete_confirmation();
@@ -795,10 +792,6 @@ impl ChatWidget {
     }
 
     fn push_history_cell(&mut self, cell: HistoryCell) {
-        if self.history.len() >= MAX_HISTORY_ITEMS {
-            self.history.pop_front();
-            self.selected_history = self.selected_history.saturating_sub(1);
-        }
         self.history.push_back(cell);
         self.selected_history = self.history.len().saturating_sub(1);
     }
@@ -917,7 +910,6 @@ fn is_help_key(key_event: KeyEvent) -> bool {
 mod tests {
     use super::{ChatWidget, HelpOverlayContext, PageMode, WidgetAction};
     use crate::supabase::RecentMemo;
-    use crate::tui::types::MAX_HISTORY_ITEMS;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
@@ -941,22 +933,60 @@ mod tests {
     }
 
     #[test]
-    fn history_eviction_keeps_latest_entries_ordered() {
+    fn history_keeps_all_entries_without_eviction() {
         let mut widget = ChatWidget::new();
-        for idx in 0..(MAX_HISTORY_ITEMS + 2) {
+        for idx in 0..102 {
             widget.on_validation_error(&format!("entry-{idx}"));
         }
 
-        let expected_last = format!("entry-{}", MAX_HISTORY_ITEMS + 1);
-        assert_eq!(widget.history().len(), MAX_HISTORY_ITEMS);
+        assert_eq!(widget.history().len(), 102);
         assert_eq!(
             widget.history().front().map(|cell| cell.full_text.as_str()),
-            Some("entry-2")
+            Some("entry-0")
         );
         assert_eq!(
             widget.history().back().map(|cell| cell.full_text.as_str()),
-            Some(expected_last.as_str())
+            Some("entry-101")
         );
+    }
+
+    #[test]
+    fn hydrate_history_keeps_image_only_memos() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![memo("memo-1", "", "7")]);
+
+        assert_eq!(widget.history().len(), 1);
+        assert_eq!(
+            widget
+                .history()
+                .front()
+                .and_then(|cell| cell.memo_id.as_deref()),
+            Some("memo-1")
+        );
+        assert_eq!(
+            widget.history().front().map(|cell| cell.full_text.as_str()),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn refresh_history_preserves_selection_with_image_only_memo() {
+        let mut widget = ChatWidget::new();
+        let memos = vec![memo("memo-2", "", "2"), memo("memo-1", "memo-1", "1")];
+        widget.hydrate_history_from_memos(memos.clone());
+
+        let selected_memo_id_before = widget
+            .selected_history()
+            .and_then(|index| widget.history().get(index))
+            .and_then(|cell| cell.memo_id.clone());
+        widget.refresh_history_from_memos(memos);
+        let selected_memo_id_after = widget
+            .selected_history()
+            .and_then(|index| widget.history().get(index))
+            .and_then(|cell| cell.memo_id.clone());
+
+        assert_eq!(widget.history().len(), 2);
+        assert_eq!(selected_memo_id_before, selected_memo_id_after);
     }
 
     #[test]
@@ -1258,6 +1288,28 @@ mod tests {
         assert_eq!(action, WidgetAction::None);
         assert_eq!(widget.page_mode(), PageMode::Composer);
         assert!(widget.bottom_pane_mut().composer_mut().is_insert_mode());
+    }
+
+    #[test]
+    fn r_in_memo_list_emits_refresh_history() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        let action = widget.handle_key_event(key(KeyCode::Char('r')));
+
+        assert_eq!(action, WidgetAction::RefreshHistory);
+    }
+
+    #[test]
+    fn shift_r_in_memo_list_emits_refresh_history() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        let action = widget.handle_key_event(shift_char('R'));
+
+        assert_eq!(action, WidgetAction::RefreshHistory);
     }
 
     #[test]

@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::env_loader;
 use crate::error::AppError;
 
+const MEMO_LIST_PAGE_SIZE: usize = 200;
+
 #[derive(Debug, Clone)]
 pub struct Session {
     pub access_token: String,
@@ -261,17 +263,37 @@ impl SupabaseClient {
         })
     }
 
-    pub async fn list_recent_memos(
+    pub async fn list_recent_memos(&self, access_token: &str) -> Result<Vec<RecentMemo>, AppError> {
+        let mut memos = Vec::new();
+        let mut offset = 0usize;
+
+        loop {
+            let page = self
+                .list_recent_memos_page(access_token, MEMO_LIST_PAGE_SIZE, offset)
+                .await?;
+            let page_len = page.len();
+            memos.extend(page);
+            if !should_fetch_next_page(page_len, MEMO_LIST_PAGE_SIZE) {
+                break;
+            }
+            offset = offset.saturating_add(page_len);
+        }
+
+        Ok(memos)
+    }
+
+    async fn list_recent_memos_page(
         &self,
         access_token: &str,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<RecentMemo>, AppError> {
         if limit == 0 {
             return Ok(Vec::new());
         }
 
         let endpoint = format!(
-            "{}/rest/v1/memos?select=id,text,created_at,version,deleted_at&deleted_at=is.null&order=updated_at.desc&limit={limit}",
+            "{}/rest/v1/memos?select=id,text,created_at,version,deleted_at&deleted_at=is.null&order=updated_at.desc&limit={limit}&offset={offset}",
             self.base_url
         );
         let response = self
@@ -649,6 +671,10 @@ fn row_to_recent_memo(row: MemoRowResponse) -> Result<RecentMemo, AppError> {
     })
 }
 
+fn should_fetch_next_page(page_len: usize, page_size: usize) -> bool {
+    page_size > 0 && page_len >= page_size
+}
+
 fn normalize_version_value(value: &serde_json::Value) -> Result<String, AppError> {
     match value {
         serde_json::Value::String(v) if !v.trim().is_empty() => Ok(v.trim().to_string()),
@@ -661,12 +687,27 @@ fn normalize_version_value(value: &serde_json::Value) -> Result<String, AppError
 
 #[cfg(test)]
 mod tests {
-    use super::extract_user_id_from_jwt;
+    use super::{extract_user_id_from_jwt, should_fetch_next_page};
 
     #[test]
     fn extract_sub_from_jwt_payload() {
         let token = "a.eyJzdWIiOiIxMjM0In0.b";
         let user_id = extract_user_id_from_jwt(token).expect("should parse sub");
         assert_eq!(user_id, "1234");
+    }
+
+    #[test]
+    fn should_fetch_next_page_when_page_is_full() {
+        assert!(should_fetch_next_page(200, 200));
+    }
+
+    #[test]
+    fn should_not_fetch_next_page_when_page_is_partial() {
+        assert!(!should_fetch_next_page(199, 200));
+    }
+
+    #[test]
+    fn should_not_fetch_next_page_with_zero_page_size() {
+        assert!(!should_fetch_next_page(10, 0));
     }
 }

@@ -16,6 +16,7 @@ const COMPOSER_INNER_PADDING_BOTTOM: u16 = 1;
 const COMPOSER_PLACEHOLDER: &str = "What's on your mind?";
 const COMPOSER_EDIT_PLACEHOLDER: &str = "Editing selected memo...";
 const COMPOSER_QUIT_CONFIRM_PLACEHOLDER: &str = "Press Esc again to quit";
+const IMAGE_ONLY_MEMO_PLACEHOLDER: &str = "[Image-only memo]";
 
 pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget) {
     let area = frame.area();
@@ -88,7 +89,8 @@ fn render_memo_list_page(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget)
                 .history()
                 .iter()
                 .map(|cell| {
-                    let memo_text = cell.full_text.replace('\n', " ");
+                    let memo_text =
+                        history_row_display_text(&cell.full_text, cell.memo_id.is_some());
                     ListItem::new(format_memo_list_row(&memo_text, list_area.width as usize))
                 })
                 .collect();
@@ -132,6 +134,14 @@ fn format_memo_list_row(memo: &str, total_width: usize) -> String {
     truncate_with_ellipsis(memo, total_width)
 }
 
+fn history_row_display_text(full_text: &str, is_memo_entry: bool) -> String {
+    let single_line = full_text.replace('\n', " ");
+    if is_memo_entry && single_line.trim().is_empty() {
+        return IMAGE_ONLY_MEMO_PLACEHOLDER.to_string();
+    }
+    single_line
+}
+
 fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget) {
     if area.height == 0 {
         return;
@@ -159,7 +169,7 @@ fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget) {
         .history()
         .iter()
         .map(|cell| {
-            let text = cell.full_text.replace('\n', " ");
+            let text = history_row_display_text(&cell.full_text, cell.memo_id.is_some());
             ListItem::new(text)
         })
         .collect();
@@ -409,6 +419,7 @@ i/a/I/A/o/O enter insert actions\n\
             "Memo List\n\
 j/k or arrows move selection\n\
 Enter open selected memo\n\
+r refresh memo list\n\
 d delete selected memo\n\
 q or Esc return to composer\n\
 ? / Esc / q close help"
@@ -546,7 +557,8 @@ mod tests {
     use super::{
         calculate_vertical_scroll, calculate_wrapped_cursor_position, composer_display_text,
         composer_footer_text, compute_composer_only_layout, compute_split_layout,
-        format_memo_list_row, help_overlay_content, memo_list_footer_text, truncate_with_ellipsis,
+        format_memo_list_row, help_overlay_content, history_row_display_text,
+        memo_list_footer_text, truncate_with_ellipsis,
     };
     use crate::tui::chat_widget::HelpOverlayContext;
     use crate::tui::composer::VimMode;
@@ -669,6 +681,20 @@ mod tests {
     }
 
     #[test]
+    fn history_row_display_text_uses_placeholder_for_empty_memo_entries() {
+        assert_eq!(history_row_display_text("", true), "[Image-only memo]");
+        assert_eq!(
+            history_row_display_text(" \n\t ", true),
+            "[Image-only memo]"
+        );
+    }
+
+    #[test]
+    fn history_row_display_text_keeps_non_memo_empty_entries() {
+        assert_eq!(history_row_display_text("", false), "");
+    }
+
+    #[test]
     fn help_overlay_content_is_context_specific() {
         let composer = help_overlay_content(HelpOverlayContext::ComposerNormal);
         assert!(composer.contains("Composer NORMAL"));
@@ -678,6 +704,7 @@ mod tests {
         let memo_list = help_overlay_content(HelpOverlayContext::MemoList);
         assert!(memo_list.contains("Memo List"));
         assert!(memo_list.contains("Enter open selected memo"));
+        assert!(memo_list.contains("r refresh memo list"));
     }
 
     #[test]

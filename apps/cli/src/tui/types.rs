@@ -1,7 +1,5 @@
 use chrono::{DateTime, Utc};
 
-pub const MAX_HISTORY_ITEMS: usize = 100;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusArea {
     History,
