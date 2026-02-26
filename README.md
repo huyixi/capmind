@@ -1,4 +1,4 @@
-# cap-mind
+# capmind
 
 Monorepo containing:
 
@@ -62,12 +62,19 @@ pnpm run fmt:cli
   - `SUPABASE_URL`
   - `SUPABASE_ANON_KEY`
 - Web auto-maps these to `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` when missing.
+- CI secret for DB security checks:
+  - `SUPABASE_DB_HOST` (for example `db.<project-ref>.supabase.co`)
+  - `SUPABASE_DB_USER` (for example `postgres`)
+  - `SUPABASE_DB_PASSWORD` (database password)
+  - Optional: `SUPABASE_DB_PORT` (defaults to `5432`)
+  - Optional: `SUPABASE_DB_NAME` (defaults to `postgres`)
 
 ## CI
 
 - `web-ci`: path-scoped workflow for `apps/web/**`
 - `cli-ci`: path-scoped workflow for `apps/cli/**`
 - `cli-release`: independent CLI release workflow (manual or push tag `cli-v*`)
+- `db-security-check`: validates Supabase RLS/policies/privileges for memo isolation (`supabase/**`)
 
 ## Release docs
 

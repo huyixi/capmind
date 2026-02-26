@@ -1,30 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
-import { buildMemoFromRow, MEMO_SELECT_FIELDS, type MemoRow } from "@/lib/memos";
+import { buildMemoFromRow, type MemoRow } from "@/lib/memos";
 import { MEMO_IMAGES_BUCKET } from "@/lib/memo-constants";
 import { extractStoragePath } from "@/lib/supabase/storage";
 
-function incrementNumericString(value: string) {
-  const digits = value.split("");
-  let carry = 1;
+type MemoUpdateRpcStatus =
+  | "updated"
+  | "deleted"
+  | "restored"
+  | "conflict"
+  | "not_found";
 
-  for (let i = digits.length - 1; i >= 0 && carry > 0; i -= 1) {
-    const next = (digits[i].charCodeAt(0) - 48) + carry;
-    if (next >= 10) {
-      digits[i] = "0";
-      carry = 1;
-    } else {
-      digits[i] = String.fromCharCode(48 + next);
-      carry = 0;
-    }
-  }
-
-  if (carry > 0) {
-    digits.unshift("1");
-  }
-
-  return digits.join("");
-}
+type MemoUpdateRpcResult = {
+  status: MemoUpdateRpcStatus;
+  memo_id: string;
+  memo: MemoRow | null;
+  server_memo: MemoRow | null;
+  forked_memo: MemoRow | null;
+};
 
 export async function PATCH(
   request: NextRequest,
@@ -93,42 +86,49 @@ export async function PATCH(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const updatedAt = new Date().toISOString();
-  const nextVersion = incrementNumericString(expectedVersion);
-  const { data: updated, error: updateError } = await supabase
-    .from("memos")
-    .update({ text: trimmedText, updated_at: updatedAt, version: nextVersion })
-    .eq("id", memoId)
-    .eq("user_id", user.id)
-    .eq("version", expectedVersion)
-    .select(MEMO_SELECT_FIELDS)
-    .order("sort_order", { referencedTable: "memo_images", ascending: true })
-    .maybeSingle();
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    "memo_update_resolve_conflict",
+    {
+      arg_memo_id: memoId,
+      arg_text: trimmedText,
+      arg_expected_version: expectedVersion,
+      arg_image_urls: shouldUpdateImages ? normalizedImageUrls : null,
+    },
+  );
 
-  if (updateError) {
-    console.error("Error updating memo:", updateError);
+  if (rpcError) {
+    console.error("Error resolving memo update conflict:", rpcError);
     return NextResponse.json(
       { error: "Failed to update memo" },
       { status: 500 },
     );
   }
 
-  if (!updated) {
-    const { data: existing, error: existingError } = await supabase
-      .from("memos")
-      .select(MEMO_SELECT_FIELDS)
-      .eq("id", memoId)
-      .eq("user_id", user.id)
-      .order("sort_order", { referencedTable: "memo_images", ascending: true })
-      .maybeSingle();
+  const rpcRows = Array.isArray(rpcData)
+    ? (rpcData as MemoUpdateRpcResult[])
+    : rpcData
+      ? ([rpcData] as MemoUpdateRpcResult[])
+      : [];
+  const rpcResult = rpcRows[0];
+  if (!rpcResult) {
+    return NextResponse.json({ error: "Failed to update memo" }, { status: 500 });
+  }
 
-    if (existingError || !existing) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
+  if (rpcResult.status === "not_found") {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
 
-    const memo = await buildMemoFromRow(supabase, existing as MemoRow);
+  if (rpcResult.status === "conflict") {
+    const serverMemoRow = rpcResult.server_memo;
+    const forkedMemoRow = rpcResult.forked_memo;
+    const memo = serverMemoRow
+      ? await buildMemoFromRow(supabase, serverMemoRow)
+      : null;
+    const forkedMemo = forkedMemoRow
+      ? await buildMemoFromRow(supabase, forkedMemoRow)
+      : null;
     const jsonResponse = NextResponse.json(
-      { error: "Conflict", memo },
+      { error: "Conflict", memo, forkedMemo },
       { status: 409 },
     );
     response.cookies.getAll().forEach((cookie) => {
@@ -137,54 +137,11 @@ export async function PATCH(
     return jsonResponse;
   }
 
-  if (shouldUpdateImages) {
-    const { error: deleteError } = await supabase
-      .from("memo_images")
-      .delete()
-      .eq("memo_id", memoId);
-
-    if (deleteError) {
-      console.error("Error updating memo images:", deleteError);
-      return NextResponse.json(
-        { error: "Failed to update memo images" },
-        { status: 500 },
-      );
-    }
-
-    if (normalizedImageUrls.length > 0) {
-      const { error: insertError } = await supabase.from("memo_images").insert(
-        normalizedImageUrls.map((url, index) => ({
-          memo_id: memoId,
-          url,
-          sort_order: index,
-        })),
-      );
-
-      if (insertError) {
-        console.error("Error updating memo images:", insertError);
-        return NextResponse.json(
-          { error: "Failed to update memo images" },
-          { status: 500 },
-        );
-      }
-    }
+  if (rpcResult.status !== "updated" || !rpcResult.memo) {
+    return NextResponse.json({ error: "Failed to update memo" }, { status: 500 });
   }
 
-  const memoRow = shouldUpdateImages
-    ? await supabase
-        .from("memos")
-        .select(MEMO_SELECT_FIELDS)
-        .eq("id", memoId)
-        .eq("user_id", user.id)
-        .order("sort_order", { referencedTable: "memo_images", ascending: true })
-        .maybeSingle()
-    : { data: updated, error: null };
-
-  if (memoRow.error || !memoRow.data) {
-    return NextResponse.json({ error: "Failed to load memo" }, { status: 500 });
-  }
-
-  const memo = await buildMemoFromRow(supabase, memoRow.data as MemoRow);
+  const memo = await buildMemoFromRow(supabase, rpcResult.memo);
   const jsonResponse = NextResponse.json({ memo });
   response.cookies.getAll().forEach((cookie) => {
     jsonResponse.cookies.set(cookie);

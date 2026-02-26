@@ -39,7 +39,7 @@ export default function LoginPage() {
     } catch (err) {
       if (err instanceof TypeError && err.message.includes("Failed to fetch")) {
         setError(
-          "Cannot reach Supabase. Check SUPABASE_URL/SUPABASE_ANON_KEY in cap-mind/.env.local and restart dev server.",
+          "Cannot reach Supabase. Check SUPABASE_URL/SUPABASE_ANON_KEY in capmind/.env.local and restart dev server.",
         );
         return;
       }

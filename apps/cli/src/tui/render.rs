@@ -1,14 +1,14 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
-use super::chat_widget::ChatWidget;
-use super::theme::{PaneColors, UiTheme};
+use super::chat_widget::{ChatWidget, HelpOverlayContext, PageMode};
+use super::composer::VimMode;
 use super::types::FocusArea;
 
-const HISTORY_FIXED_HEIGHT: u16 = 3;
+const HISTORY_FIXED_HEIGHT: u16 = 6;
 const COMPOSER_H_INSET: u16 = 0;
 const COMPOSER_INNER_PADDING_X: u16 = 0;
 const COMPOSER_INNER_PADDING_TOP: u16 = 1;
@@ -17,25 +17,127 @@ const COMPOSER_PLACEHOLDER: &str = "What's on your mind?";
 const COMPOSER_EDIT_PLACEHOLDER: &str = "Editing selected memo...";
 const COMPOSER_QUIT_CONFIRM_PLACEHOLDER: &str = "Press Esc again to quit";
 
-pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget, theme: &UiTheme) {
+pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget) {
     let area = frame.area();
     if area.width == 0 || area.height == 0 {
         return;
     }
 
-    let layout = compute_layout(area);
+    match widget.page_mode() {
+        PageMode::Composer => render_composer_page(frame, area, widget),
+        PageMode::MemoList => render_memo_list_page(frame, area, widget),
+    }
 
-    render_history(frame, layout.history, widget, &theme.composer);
-    render_composer(frame, layout.composer, layout.composer_input, widget);
+    render_help_overlay(frame, area, widget.help_overlay());
     render_delete_confirmation(frame, area, widget.delete_confirmation_text());
+    render_wq_failure_prompt(frame, area, widget.wq_failure_prompt());
 }
 
-fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget, colors: &PaneColors) {
+fn render_composer_page(frame: &mut Frame<'_>, area: Rect, widget: &mut ChatWidget) {
+    let layout = if widget.split_list_open() {
+        compute_split_layout(area)
+    } else {
+        compute_composer_only_layout(area)
+    };
+    let composer_mode = widget.bottom_pane_mut().composer_mut().vim_mode();
+
+    if widget.split_list_open() {
+        render_history(frame, layout.history, widget);
+    }
+    render_composer(
+        frame,
+        layout.composer,
+        layout.composer_input,
+        widget,
+        composer_mode,
+    );
+}
+
+fn render_memo_list_page(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget) {
+    let pane_style = Style::default();
+    frame.render_widget(Block::default().style(pane_style), area);
+
     if area.height == 0 {
         return;
     }
 
-    let pane_style = Style::default().fg(Color::Reset).bg(colors.normal_bg);
+    let footer = Rect {
+        x: area.x,
+        y: area.y.saturating_add(area.height.saturating_sub(1)),
+        width: area.width,
+        height: 1,
+    };
+    let list_height = area.height.saturating_sub(1);
+    let list_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: list_height,
+    };
+
+    if list_area.height > 0 {
+        if widget.history().is_empty() {
+            frame.render_widget(
+                Paragraph::new("No memos yet.")
+                    .style(pane_style)
+                    .wrap(Wrap { trim: false }),
+                list_area,
+            );
+        } else {
+            let items: Vec<ListItem<'_>> = widget
+                .history()
+                .iter()
+                .map(|cell| {
+                    let memo_text = cell.full_text.replace('\n', " ");
+                    ListItem::new(format_memo_list_row(&memo_text, list_area.width as usize))
+                })
+                .collect();
+
+            let list = List::new(items)
+                .style(pane_style)
+                .highlight_style(
+                    Style::default()
+                        .add_modifier(Modifier::REVERSED)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("");
+            let mut state = ListState::default();
+            state.select(widget.selected_history());
+            frame.render_stateful_widget(list, list_area, &mut state);
+        }
+    }
+
+    let selected_memo_time = widget
+        .selected_history()
+        .and_then(|index| widget.history().get(index))
+        .map(|cell| cell.created_at.format("%Y-%m-%d %H:%M:%S").to_string());
+    let footer_text = memo_list_footer_text(widget.status_message(), selected_memo_time.as_deref());
+    frame.render_widget(
+        Paragraph::new(footer_text).style(Style::default().add_modifier(Modifier::DIM)),
+        footer,
+    );
+}
+
+fn memo_list_footer_text(status_message: Option<&str>, selected_memo_time: Option<&str>) -> String {
+    if let Some(status) = status_message {
+        return status.to_string();
+    }
+    selected_memo_time.unwrap_or("").to_string()
+}
+
+fn format_memo_list_row(memo: &str, total_width: usize) -> String {
+    if total_width == 0 {
+        return String::new();
+    }
+    truncate_with_ellipsis(memo, total_width)
+}
+
+fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget) {
+    if area.height == 0 {
+        return;
+    }
+
+    let pane_style = Style::default();
 
     frame.render_widget(Block::default().style(pane_style), area);
     let content_area = area;
@@ -57,17 +159,14 @@ fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget, colors
         .history()
         .iter()
         .map(|cell| {
-            let ts = cell.created_at.format("%Y-%m-%d %H:%M:%S");
             let text = cell.full_text.replace('\n', " ");
-            ListItem::new(format!("{ts} {text}"))
+            ListItem::new(text)
         })
         .collect();
 
     let history_focused = widget.focus() == FocusArea::History;
     let highlight_style = if history_focused {
         Style::default()
-            .fg(Color::Reset)
-            .bg(Color::Reset)
             .add_modifier(Modifier::REVERSED)
             .add_modifier(Modifier::BOLD)
     } else {
@@ -83,33 +182,39 @@ fn render_history(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget, colors
     frame.render_stateful_widget(list, content_area, &mut state);
 }
 
-fn render_composer(frame: &mut Frame<'_>, area: Rect, input_area: Rect, widget: &mut ChatWidget) {
+fn render_composer(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    input_area: Rect,
+    widget: &mut ChatWidget,
+    composer_mode: VimMode,
+) {
     if area.height == 0 || area.width == 0 || input_area.height == 0 || input_area.width == 0 {
         return;
     }
 
     let focused = widget.focus() == FocusArea::Composer;
     let block_style = Style::default();
-    let text_style = Style::default().fg(Color::Reset);
+    let text_style = Style::default();
 
     frame.render_widget(Block::default().style(block_style), area);
 
-    let is_editing_memo = widget.is_editing_memo();
+    let status_message = widget.status_message().map(ToString::to_string);
     let quit_confirmation_pending = widget.quit_confirmation_pending();
+    let is_editing_memo = widget.is_editing_memo();
+
     let composer = widget.bottom_pane_mut().composer_mut();
-    composer.ensure_cursor_visible(input_area.height);
     let text = composer.lines().join("\n");
-    let (display_text, is_placeholder) =
-        composer_display_text(&text, is_editing_memo, quit_confirmation_pending);
-    let cursor_row_abs = composer.cursor_row();
-    let cursor_row = cursor_row_abs.saturating_sub(composer.scroll_y() as usize) as u16;
-    let current_line = composer
-        .lines()
-        .get(cursor_row_abs)
-        .map(String::as_str)
-        .unwrap_or("");
-    let raw_cursor_col = display_width_until_char(current_line, composer.cursor_col());
-    let horizontal_scroll = calculate_horizontal_scroll(raw_cursor_col, input_area.width);
+    let (display_text, is_placeholder) = composer_display_text(&text, is_editing_memo);
+    let raw_cursor_col = composer.cursor_display_col().min(u16::MAX as usize) as u16;
+    let (cursor_row_abs, cursor_col) = calculate_wrapped_cursor_position(
+        composer.lines(),
+        composer.cursor_row(),
+        raw_cursor_col,
+        input_area.width,
+    );
+    let vertical_scroll = calculate_vertical_scroll(cursor_row_abs, input_area.height);
+    let cursor_row = cursor_row_abs.saturating_sub(vertical_scroll);
     let paragraph_style = if is_placeholder {
         text_style.add_modifier(Modifier::DIM)
     } else {
@@ -117,16 +222,30 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, input_area: Rect, widget: 
     };
     let paragraph = Paragraph::new(display_text)
         .style(paragraph_style)
-        .scroll((composer.scroll_y(), horizontal_scroll));
+        .wrap(Wrap { trim: false })
+        .scroll((vertical_scroll, 0));
     frame.render_widget(paragraph, input_area);
+
+    let footer = composer_footer_text(
+        composer_mode,
+        quit_confirmation_pending,
+        status_message.as_deref(),
+    );
+    frame.render_widget(
+        Paragraph::new(footer.clone()).style(text_style.add_modifier(Modifier::DIM)),
+        Rect {
+            x: area.x,
+            y: area.y.saturating_add(area.height.saturating_sub(1)),
+            width: area.width,
+            height: 1,
+        },
+    );
 
     if focused {
         let row = cursor_row;
         if row < input_area.height {
             let max_col = input_area.width.saturating_sub(1);
-            let col = raw_cursor_col
-                .saturating_sub(horizontal_scroll)
-                .min(max_col);
+            let col = cursor_col.min(max_col);
             let x = input_area.x.saturating_add(col);
             let y = input_area.y.saturating_add(row);
             frame.set_cursor_position((x, y));
@@ -134,26 +253,72 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, input_area: Rect, widget: 
     }
 }
 
-fn display_width_until_char(input: &str, char_idx: usize) -> u16 {
-    let width = input.chars().take(char_idx).fold(0usize, |acc, c| {
-        acc.saturating_add(UnicodeWidthChar::width(c).unwrap_or(0))
-    });
-    width.min(u16::MAX as usize) as u16
-}
-
-fn calculate_horizontal_scroll(cursor_col: u16, viewport_width: u16) -> u16 {
-    cursor_col.saturating_sub(viewport_width.saturating_sub(1))
-}
-
-fn composer_display_text(
-    text: &str,
-    is_editing_memo: bool,
+fn composer_footer_text(
+    mode: VimMode,
     quit_confirmation_pending: bool,
-) -> (String, bool) {
+    status_message: Option<&str>,
+) -> String {
+    if let Some(status) = status_message {
+        return status.to_string();
+    }
+
+    if quit_confirmation_pending {
+        COMPOSER_QUIT_CONFIRM_PLACEHOLDER.to_string()
+    } else if mode == VimMode::Insert {
+        "Mode: INSERT".to_string()
+    } else {
+        "Mode: NORMAL (? help)".to_string()
+    }
+}
+
+fn calculate_wrapped_cursor_position(
+    lines: &[String],
+    cursor_row: usize,
+    cursor_col: u16,
+    viewport_width: u16,
+) -> (u16, u16) {
+    if viewport_width == 0 {
+        return (0, 0);
+    }
+
+    let width = viewport_width as usize;
+    let mut visual_row_abs: u16 = 0;
+    let safe_cursor_row = cursor_row.min(lines.len().saturating_sub(1));
+    for line in lines.iter().take(safe_cursor_row) {
+        let line_width = UnicodeWidthStr::width(line.as_str());
+        visual_row_abs = visual_row_abs.saturating_add(wrapped_line_count(line_width, width));
+    }
+
+    let cursor_col_usize = cursor_col as usize;
+    let wrapped_row_offset = (cursor_col_usize / width).min(u16::MAX as usize) as u16;
+    let wrapped_col = (cursor_col_usize % width) as u16;
+    (
+        visual_row_abs.saturating_add(wrapped_row_offset),
+        wrapped_col,
+    )
+}
+
+fn wrapped_line_count(line_width: usize, viewport_width: usize) -> u16 {
+    if viewport_width == 0 {
+        return 0;
+    }
+    if line_width == 0 {
+        return 1;
+    }
+    line_width
+        .saturating_sub(1)
+        .saturating_div(viewport_width)
+        .saturating_add(1)
+        .min(u16::MAX as usize) as u16
+}
+
+fn calculate_vertical_scroll(cursor_row: u16, viewport_height: u16) -> u16 {
+    cursor_row.saturating_sub(viewport_height.saturating_sub(1))
+}
+
+fn composer_display_text(text: &str, is_editing_memo: bool) -> (String, bool) {
     if text.is_empty() {
-        if quit_confirmation_pending {
-            (COMPOSER_QUIT_CONFIRM_PLACEHOLDER.to_string(), true)
-        } else if is_editing_memo {
+        if is_editing_memo {
             (COMPOSER_EDIT_PLACEHOLDER.to_string(), true)
         } else {
             (COMPOSER_PLACEHOLDER.to_string(), true)
@@ -182,7 +347,7 @@ fn render_delete_confirmation(frame: &mut Frame<'_>, area: Rect, preview: Option
 
     let preview_single_line = preview.replace('\n', " ");
     let max_preview_chars = popup_width.saturating_sub(6) as usize;
-    let preview_display = truncate_for_popup(&preview_single_line, max_preview_chars);
+    let preview_display = truncate_with_ellipsis(&preview_single_line, max_preview_chars);
     let content =
         format!("Delete selected memo?\n\"{preview_display}\"\nEnter/Y/D confirm | Esc/N cancel");
 
@@ -194,13 +359,99 @@ fn render_delete_confirmation(frame: &mut Frame<'_>, area: Rect, preview: Option
                     .borders(Borders::ALL)
                     .title("Confirm Delete"),
             )
-            .style(Style::default().fg(Color::Reset).bg(Color::Reset))
+            .style(Style::default())
             .wrap(Wrap { trim: true }),
         popup,
     );
 }
 
-fn truncate_for_popup(input: &str, limit: usize) -> String {
+fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, context: Option<HelpOverlayContext>) {
+    let Some(context) = context else {
+        return;
+    };
+    if area.width < 40 || area.height < 8 {
+        return;
+    }
+
+    let content = help_overlay_content(context);
+    let line_count = content.lines().count().min(u16::MAX as usize) as u16;
+    let popup_width = area.width.min(92);
+    let popup_height = line_count.saturating_add(2).max(8).min(area.height);
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
+        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(content)
+            .block(Block::default().borders(Borders::ALL).title("Help"))
+            .style(Style::default())
+            .wrap(Wrap { trim: true }),
+        popup,
+    );
+}
+
+fn help_overlay_content(context: HelpOverlayContext) -> &'static str {
+    match context {
+        HelpOverlayContext::ComposerNormal => {
+            "Composer NORMAL\n\
+w/s submit | W submit+quit on success\n\
+q quit if clean | Q force quit\n\
+l open memo list | p toggle split list\n\
+h/j/k/l move | b 0 $ | x dd edit\n\
+i/a/I/A/o/O enter insert actions\n\
+? / Esc / q close help"
+        }
+        HelpOverlayContext::MemoList => {
+            "Memo List\n\
+j/k or arrows move selection\n\
+Enter open selected memo\n\
+d delete selected memo\n\
+q or Esc return to composer\n\
+? / Esc / q close help"
+        }
+    }
+}
+
+fn render_wq_failure_prompt(frame: &mut Frame<'_>, area: Rect, message: Option<&str>) {
+    let Some(message) = message else {
+        return;
+    };
+    if area.width < 40 || area.height < 7 {
+        return;
+    }
+
+    let popup_width = area.width.min(84);
+    let popup_height = 7;
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
+        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    let content = format!(
+        "Save failed after 3 attempts.\n{message}\nEnter/Q quit without submit | Esc/C continue editing"
+    );
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(content)
+            .block(Block::default().borders(Borders::ALL).title("Save Failed"))
+            .style(Style::default())
+            .wrap(Wrap { trim: true }),
+        popup,
+    );
+}
+
+fn truncate_with_ellipsis(input: &str, limit: usize) -> String {
+    if limit == 0 {
+        return String::new();
+    }
+
     if input.chars().count() <= limit {
         return input.to_string();
     }
@@ -216,19 +467,19 @@ struct FloatingLayout {
     composer_input: Rect,
 }
 
-fn compute_layout(area: Rect) -> FloatingLayout {
+fn compute_split_layout(area: Rect) -> FloatingLayout {
     let usable_height = area.height;
     let history_height = HISTORY_FIXED_HEIGHT.min(usable_height.saturating_sub(1));
     let composer_height = usable_height.saturating_sub(history_height);
 
-    let inset = COMPOSER_H_INSET.min(area.width.saturating_sub(1) / 2);
+    let inset = COMPOSER_H_INSET;
     let composer = Rect {
         x: area.x.saturating_add(inset),
         y: area.y,
         width: area.width.saturating_sub(inset.saturating_mul(2)),
         height: composer_height,
     };
-    let input_pad_x = COMPOSER_INNER_PADDING_X.min(composer.width.saturating_sub(1) / 2);
+    let input_pad_x = COMPOSER_INNER_PADDING_X;
     let input_pad_top = COMPOSER_INNER_PADDING_TOP.min(composer.height.saturating_sub(1));
     let input_pad_bottom = COMPOSER_INNER_PADDING_BOTTOM.min(
         composer
@@ -259,25 +510,59 @@ fn compute_layout(area: Rect) -> FloatingLayout {
     }
 }
 
+fn compute_composer_only_layout(area: Rect) -> FloatingLayout {
+    let composer = area;
+    let input_pad_x = COMPOSER_INNER_PADDING_X;
+    let input_pad_top = COMPOSER_INNER_PADDING_TOP.min(composer.height.saturating_sub(1));
+    let input_pad_bottom = COMPOSER_INNER_PADDING_BOTTOM.min(
+        composer
+            .height
+            .saturating_sub(1)
+            .saturating_sub(input_pad_top),
+    );
+    let composer_input = Rect {
+        x: composer.x.saturating_add(input_pad_x),
+        y: composer.y.saturating_add(input_pad_top),
+        width: composer.width.saturating_sub(input_pad_x.saturating_mul(2)),
+        height: composer
+            .height
+            .saturating_sub(input_pad_top + input_pad_bottom),
+    };
+
+    FloatingLayout {
+        history: Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        },
+        composer,
+        composer_input,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        calculate_horizontal_scroll, composer_display_text, compute_layout,
-        display_width_until_char,
+        calculate_vertical_scroll, calculate_wrapped_cursor_position, composer_display_text,
+        composer_footer_text, compute_composer_only_layout, compute_split_layout,
+        format_memo_list_row, help_overlay_content, memo_list_footer_text, truncate_with_ellipsis,
     };
+    use crate::tui::chat_widget::HelpOverlayContext;
+    use crate::tui::composer::VimMode;
     use ratatui::layout::Rect;
 
     #[test]
     fn compute_layout_places_composer_at_top() {
         let area = Rect::new(0, 0, 100, 24);
-        let layout = compute_layout(area);
+        let layout = compute_split_layout(area);
         assert_eq!(layout.composer.y, area.y);
     }
 
     #[test]
     fn compute_layout_places_history_below_composer() {
         let area = Rect::new(0, 0, 100, 24);
-        let layout = compute_layout(area);
+        let layout = compute_split_layout(area);
         assert_eq!(
             layout.history.y,
             layout.composer.y.saturating_add(layout.composer.height)
@@ -287,7 +572,7 @@ mod tests {
     #[test]
     fn compute_layout_keeps_panes_non_overlapping_and_within_bounds() {
         let area = Rect::new(2, 3, 80, 20);
-        let layout = compute_layout(area);
+        let layout = compute_split_layout(area);
 
         let composer_bottom = layout.composer.y.saturating_add(layout.composer.height);
         assert!(composer_bottom <= layout.history.y);
@@ -300,58 +585,119 @@ mod tests {
     }
 
     #[test]
-    fn compute_layout_keeps_history_to_three_rows_when_space_allows() {
+    fn compute_layout_keeps_history_to_six_rows_when_space_allows() {
         let area = Rect::new(0, 0, 100, 24);
-        let layout = compute_layout(area);
-        assert_eq!(layout.history.height, 3);
-        assert_eq!(layout.composer.height, 21);
+        let layout = compute_split_layout(area);
+        assert_eq!(layout.history.height, 6);
+        assert_eq!(layout.composer.height, 18);
+    }
+
+    #[test]
+    fn compute_composer_only_layout_uses_full_area_for_composer() {
+        let area = Rect::new(0, 0, 100, 24);
+        let layout = compute_composer_only_layout(area);
+        assert_eq!(layout.composer, area);
+        assert_eq!(layout.history.height, 0);
     }
 
     #[test]
     fn composer_display_text_uses_placeholder_when_empty() {
-        let (text, is_placeholder) = composer_display_text("", false, false);
+        let (text, is_placeholder) = composer_display_text("", false);
         assert_eq!(text, "What's on your mind?");
         assert!(is_placeholder);
     }
 
     #[test]
     fn composer_display_text_uses_input_when_non_empty() {
-        let (text, is_placeholder) = composer_display_text("hello", false, false);
+        let (text, is_placeholder) = composer_display_text("hello", false);
         assert_eq!(text, "hello");
         assert!(!is_placeholder);
     }
 
     #[test]
     fn composer_display_text_uses_edit_placeholder_in_edit_mode() {
-        let (text, is_placeholder) = composer_display_text("", true, false);
+        let (text, is_placeholder) = composer_display_text("", true);
         assert_eq!(text, "Editing selected memo...");
         assert!(is_placeholder);
     }
 
     #[test]
-    fn composer_display_text_uses_quit_confirm_placeholder_when_pending() {
-        let (text, is_placeholder) = composer_display_text("", false, true);
-        assert_eq!(text, "Press Esc again to quit");
-        assert!(is_placeholder);
+    fn composer_footer_uses_status_before_mode_tip() {
+        assert_eq!(
+            composer_footer_text(VimMode::Insert, false, Some("saving...")),
+            "saving..."
+        );
     }
 
     #[test]
-    fn display_width_until_char_counts_cjk_as_double_width() {
-        let input = "你好";
-        assert_eq!(display_width_until_char(input, input.chars().count()), 4);
+    fn composer_footer_uses_quit_hint_when_pending() {
+        assert_eq!(
+            composer_footer_text(VimMode::Normal, true, None),
+            "Press Esc again to quit"
+        );
     }
 
     #[test]
-    fn display_width_until_char_handles_mixed_ascii_and_cjk() {
-        let input = "a你b";
-        assert_eq!(display_width_until_char(input, 1), 1);
-        assert_eq!(display_width_until_char(input, 2), 3);
-        assert_eq!(display_width_until_char(input, 3), 4);
+    fn calculate_wrapped_cursor_position_wraps_long_line() {
+        let lines = vec!["abcdef".to_string()];
+        assert_eq!(calculate_wrapped_cursor_position(&lines, 0, 5, 4), (1, 1));
+        assert_eq!(calculate_wrapped_cursor_position(&lines, 0, 3, 4), (0, 3));
     }
 
     #[test]
-    fn calculate_horizontal_scroll_uses_display_width_cursor() {
-        assert_eq!(calculate_horizontal_scroll(4, 3), 2);
-        assert_eq!(calculate_horizontal_scroll(2, 3), 0);
+    fn calculate_wrapped_cursor_position_counts_previous_rows() {
+        let lines = vec!["abcde".to_string(), "xy".to_string()];
+        assert_eq!(calculate_wrapped_cursor_position(&lines, 1, 1, 4), (2, 1));
+    }
+
+    #[test]
+    fn calculate_vertical_scroll_keeps_cursor_visible() {
+        assert_eq!(calculate_vertical_scroll(4, 3), 2);
+        assert_eq!(calculate_vertical_scroll(1, 3), 0);
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_truncates_when_over_limit() {
+        assert_eq!(truncate_with_ellipsis("abcdef", 4), "a...");
+        assert_eq!(truncate_with_ellipsis("abc", 4), "abc");
+    }
+
+    #[test]
+    fn format_memo_list_row_uses_memo_text_only_with_ellipsis() {
+        let row = format_memo_list_row("abcdefghijklmnopqrstuvwxyz", 10);
+        assert_eq!(row, "abcdefg...");
+    }
+
+    #[test]
+    fn help_overlay_content_is_context_specific() {
+        let composer = help_overlay_content(HelpOverlayContext::ComposerNormal);
+        assert!(composer.contains("Composer NORMAL"));
+        assert!(composer.contains("w/s submit"));
+        assert!(composer.contains("W submit+quit on success"));
+
+        let memo_list = help_overlay_content(HelpOverlayContext::MemoList);
+        assert!(memo_list.contains("Memo List"));
+        assert!(memo_list.contains("Enter open selected memo"));
+    }
+
+    #[test]
+    fn memo_list_footer_prefers_status_message() {
+        assert_eq!(
+            memo_list_footer_text(Some("loading"), Some("2026-02-26 10:00:00")),
+            "loading"
+        );
+    }
+
+    #[test]
+    fn memo_list_footer_uses_selected_time_without_status() {
+        assert_eq!(
+            memo_list_footer_text(None, Some("2026-02-26 10:00:00")),
+            "2026-02-26 10:00:00"
+        );
+    }
+
+    #[test]
+    fn memo_list_footer_is_empty_without_status_or_selection() {
+        assert_eq!(memo_list_footer_text(None, None), "");
     }
 }

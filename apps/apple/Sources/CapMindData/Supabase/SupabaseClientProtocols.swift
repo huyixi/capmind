@@ -23,6 +23,84 @@ public struct SupabaseAuthSessionPayload: Equatable, Sendable {
     }
 }
 
+public enum MemoResolveRPCStatus: String, Codable, Sendable {
+    case updated
+    case deleted
+    case restored
+    case conflict
+    case notFound = "not_found"
+}
+
+public struct MemoRPCImagePayload: Decodable, Equatable, Sendable {
+    public let url: String
+    public let sortOrder: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case url
+        case sortOrder = "sort_order"
+    }
+}
+
+public struct MemoRPCPayload: Decodable, Equatable, Sendable {
+    public let id: String
+    public let userID: String
+    public let text: String
+    public let createdAt: Date
+    public let updatedAt: Date
+    public let version: String
+    public let deletedAt: Date?
+    public let memoImages: [MemoRPCImagePayload]?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userID = "user_id"
+        case text
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case version
+        case deletedAt = "deleted_at"
+        case memoImages = "memo_images"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        userID = try container.decode(String.self, forKey: .userID)
+        text = try container.decode(String.self, forKey: .text)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+
+        if let versionString = try? container.decode(String.self, forKey: .version) {
+            version = versionString
+        } else if let versionInt = try? container.decode(Int.self, forKey: .version) {
+            version = String(versionInt)
+        } else if let versionDouble = try? container.decode(Double.self, forKey: .version) {
+            version = String(Int(versionDouble))
+        } else {
+            version = ""
+        }
+
+        deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
+        memoImages = try container.decodeIfPresent([MemoRPCImagePayload].self, forKey: .memoImages)
+    }
+}
+
+public struct MemoResolveRPCPayload: Decodable, Equatable, Sendable {
+    public let status: MemoResolveRPCStatus
+    public let memoID: String?
+    public let memo: MemoRPCPayload?
+    public let serverMemo: MemoRPCPayload?
+    public let forkedMemo: MemoRPCPayload?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case memoID = "memo_id"
+        case memo
+        case serverMemo = "server_memo"
+        case forkedMemo = "forked_memo"
+    }
+}
+
 public protocol SupabaseAuthClientProtocol: Sendable {
     func signIn(email: String, password: String) async throws -> SupabaseAuthSessionPayload
     func signUp(email: String, password: String, redirectURL: URL?) async throws -> SupabaseAuthSessionPayload?

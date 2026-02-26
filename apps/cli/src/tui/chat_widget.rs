@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -6,7 +7,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crate::supabase::{InsertedMemo, RecentMemo};
 
 use super::bottom_pane::{BottomPane, InputResult};
+use super::composer::VimMode;
 use super::types::{FocusArea, HistoryCell, MAX_HISTORY_ITEMS};
+
+const SUBMIT_SUCCESS_TIP_DURATION: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WidgetAction {
@@ -17,12 +21,30 @@ pub enum WidgetAction {
         expected_version: String,
         text: String,
     },
+    SubmitCreateBeforeQuit(String),
+    SubmitEditBeforeQuit {
+        memo_id: String,
+        expected_version: String,
+        text: String,
+    },
     RefreshHistory,
     DeleteMemo {
         memo_id: String,
         expected_version: String,
     },
     Quit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageMode {
+    Composer,
+    MemoList,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpOverlayContext {
+    ComposerNormal,
+    MemoList,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +72,15 @@ pub struct ChatWidget {
     pending_delete: Option<PendingDelete>,
     composer_mode: ComposerMode,
     quit_confirmation_pending: bool,
+    page_mode: PageMode,
+    split_list_open: bool,
+    help_overlay: Option<HelpOverlayContext>,
+    status_message: Option<String>,
+    status_message_expires_at: Option<Instant>,
+    wq_submission_in_progress: bool,
+    wq_failure_prompt: Option<String>,
+    clean_composer_text: String,
+    composer_dirty: bool,
 }
 
 impl Default for ChatWidget {
@@ -68,6 +99,15 @@ impl ChatWidget {
             pending_delete: None,
             composer_mode: ComposerMode::Create,
             quit_confirmation_pending: false,
+            page_mode: PageMode::Composer,
+            split_list_open: false,
+            help_overlay: None,
+            status_message: None,
+            status_message_expires_at: None,
+            wq_submission_in_progress: false,
+            wq_failure_prompt: None,
+            clean_composer_text: String::new(),
+            composer_dirty: false,
         }
     }
 
@@ -80,13 +120,37 @@ impl ChatWidget {
             return WidgetAction::Quit;
         }
 
-        if self.focus == FocusArea::History && is_quit_key(key_event) {
-            return WidgetAction::Quit;
+        if self.wq_failure_prompt.is_some() {
+            return self.handle_wq_failure_prompt_key(key_event);
+        }
+
+        if self.wq_submission_in_progress {
+            return WidgetAction::None;
+        }
+
+        if self.help_overlay.is_some() {
+            return self.handle_help_overlay_key(key_event);
         }
 
         if self.pending_delete.is_some() {
             self.quit_confirmation_pending = false;
             return self.handle_delete_confirmation_key(key_event);
+        }
+
+        if self.page_mode == PageMode::MemoList {
+            return self.handle_memo_list_key(key_event);
+        }
+
+        if self.split_list_open && self.focus == FocusArea::History && is_quit_key(key_event) {
+            return WidgetAction::Quit;
+        }
+
+        if self.focus == FocusArea::Composer
+            && key_event.code == KeyCode::Esc
+            && self.bottom_pane.composer().is_insert_mode()
+        {
+            self.quit_confirmation_pending = true;
+            return self.handle_composer_key(key_event);
         }
 
         if key_event.code == KeyCode::Esc {
@@ -99,10 +163,36 @@ impl ChatWidget {
 
         self.quit_confirmation_pending = false;
 
+        if let Some(action) = self.handle_normal_mode_command_key(key_event) {
+            return action;
+        }
+
         match self.focus {
             FocusArea::History => self.handle_history_key(key_event),
             FocusArea::Composer => self.handle_composer_key(key_event),
         }
+    }
+
+    pub fn on_wq_submission_status(&mut self, message: &str) {
+        self.set_status_message(message.to_string());
+    }
+
+    pub fn on_wq_submission_failed(&mut self, message: &str) {
+        self.wq_submission_in_progress = false;
+        self.wq_failure_prompt = Some(message.to_string());
+        self.set_status_message(format!("Save failed: {message}"));
+    }
+
+    pub fn on_wq_submission_succeeded(&mut self) {
+        self.wq_submission_in_progress = false;
+        self.wq_failure_prompt = None;
+        self.clear_status_message();
+    }
+
+    pub fn open_memo_list_page(&mut self) {
+        self.page_mode = PageMode::MemoList;
+        self.focus = FocusArea::History;
+        self.pending_delete = None;
     }
 
     pub fn bottom_pane_mut(&mut self) -> &mut BottomPane {
@@ -128,6 +218,18 @@ impl ChatWidget {
         self.focus
     }
 
+    pub fn page_mode(&self) -> PageMode {
+        self.page_mode
+    }
+
+    pub fn split_list_open(&self) -> bool {
+        self.split_list_open
+    }
+
+    pub fn help_overlay(&self) -> Option<HelpOverlayContext> {
+        self.help_overlay
+    }
+
     pub fn delete_confirmation_text(&self) -> Option<&str> {
         self.pending_delete
             .as_ref()
@@ -142,6 +244,24 @@ impl ChatWidget {
         matches!(self.composer_mode, ComposerMode::Edit { .. })
     }
 
+    pub fn status_message(&self) -> Option<&str> {
+        if let Some(expires_at) = self.status_message_expires_at
+            && Instant::now() >= expires_at
+        {
+            return None;
+        }
+        self.status_message.as_deref()
+    }
+
+    pub fn wq_failure_prompt(&self) -> Option<&str> {
+        self.wq_failure_prompt.as_deref()
+    }
+
+    #[cfg(test)]
+    pub fn wq_submission_in_progress(&self) -> bool {
+        self.wq_submission_in_progress
+    }
+
     pub fn on_submit_success(
         &mut self,
         text: &str,
@@ -149,6 +269,7 @@ impl ChatWidget {
         created_at: &str,
         version: &str,
     ) {
+        self.on_wq_submission_succeeded();
         self.push_history_memo(
             text.to_string(),
             parse_timestamp(created_at).unwrap_or_else(Utc::now),
@@ -156,11 +277,19 @@ impl ChatWidget {
             version.to_string(),
         );
         self.reset_composer_state();
+        self.show_submit_success_tip();
+    }
+
+    pub fn on_submit_started(&mut self) {
+        self.reset_composer_state();
+        self.set_status_message("Submitting...".to_string());
     }
 
     pub fn on_edit_success(&mut self, updated_memo: &RecentMemo) {
+        self.on_wq_submission_succeeded();
         self.upsert_history_memo(updated_memo);
         self.reset_composer_state();
+        self.show_submit_success_tip();
     }
 
     pub fn on_edit_conflict(
@@ -169,6 +298,7 @@ impl ChatWidget {
         submitted_text: &str,
         forked: &InsertedMemo,
     ) {
+        self.on_wq_submission_succeeded();
         self.upsert_history_memo(server_memo);
         self.push_history_memo(
             submitted_text.to_string(),
@@ -177,15 +307,18 @@ impl ChatWidget {
             forked.version.clone(),
         );
         self.reset_composer_state();
+        self.show_submit_success_tip();
     }
 
     pub fn on_submit_error(&mut self, text: &str, message: &str) {
         let full_text = format!("{message}\n\n{text}");
         self.push_history(full_text);
+        self.set_status_message(message.to_string());
     }
 
     pub fn on_validation_error(&mut self, message: &str) {
         self.push_history(message.to_string());
+        self.set_status_message(message.to_string());
     }
 
     pub fn on_delete_success(&mut self, memo_id: &str) {
@@ -207,6 +340,7 @@ impl ChatWidget {
             && editing_id == memo_id
         {
             self.composer_mode = ComposerMode::Create;
+            self.set_clean_composer_text("");
         }
 
         if self.history.is_empty() {
@@ -300,7 +434,11 @@ impl ChatWidget {
     }
 
     fn handle_composer_key(&mut self, key_event: KeyEvent) -> WidgetAction {
-        match self.bottom_pane.handle_key_event(key_event) {
+        let before_text = self.bottom_pane.composer().text();
+        let result = self.bottom_pane.handle_key_event(key_event);
+        self.refresh_composer_dirty_state();
+
+        let action = match result {
             InputResult::None => WidgetAction::None,
             InputResult::Submitted(text) => match &self.composer_mode {
                 ComposerMode::Create => WidgetAction::SubmitCreate(text),
@@ -315,10 +453,18 @@ impl ChatWidget {
             },
             InputResult::Cancelled => WidgetAction::None,
             InputResult::SwitchFocusToHistory => {
-                self.focus = FocusArea::History;
+                if self.split_list_open {
+                    self.focus = FocusArea::History;
+                }
                 WidgetAction::None
             }
+        };
+
+        if before_text != self.bottom_pane.composer().text() {
+            self.clear_status_message();
         }
+
+        action
     }
 
     fn handle_history_key(&mut self, key_event: KeyEvent) -> WidgetAction {
@@ -332,8 +478,7 @@ impl ChatWidget {
                 WidgetAction::None
             }
             KeyCode::Char(c)
-                if (key_event.modifiers.is_empty() || key_event.modifiers == KeyModifiers::SHIFT)
-                    && c.eq_ignore_ascii_case(&'k') =>
+                if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'k') =>
             {
                 self.move_history_selection(-1);
                 WidgetAction::None
@@ -343,8 +488,7 @@ impl ChatWidget {
                 WidgetAction::None
             }
             KeyCode::Char(c)
-                if (key_event.modifiers.is_empty() || key_event.modifiers == KeyModifiers::SHIFT)
-                    && c.eq_ignore_ascii_case(&'j') =>
+                if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'j') =>
             {
                 self.move_history_selection(1);
                 WidgetAction::None
@@ -359,6 +503,56 @@ impl ChatWidget {
             }
             KeyCode::Char(c) if c.eq_ignore_ascii_case(&'r') => WidgetAction::RefreshHistory,
             KeyCode::Esc => WidgetAction::None,
+            _ => WidgetAction::None,
+        }
+    }
+
+    fn handle_memo_list_key(&mut self, key_event: KeyEvent) -> WidgetAction {
+        if is_help_key(key_event) {
+            self.help_overlay = Some(HelpOverlayContext::MemoList);
+            return WidgetAction::None;
+        }
+
+        match key_event.code {
+            KeyCode::Up => {
+                self.move_history_selection(-1);
+                WidgetAction::None
+            }
+            KeyCode::Char(c)
+                if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'k') =>
+            {
+                self.move_history_selection(-1);
+                WidgetAction::None
+            }
+            KeyCode::Down => {
+                self.move_history_selection(1);
+                WidgetAction::None
+            }
+            KeyCode::Char(c)
+                if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'j') =>
+            {
+                self.move_history_selection(1);
+                WidgetAction::None
+            }
+            KeyCode::Enter => {
+                self.load_selected_history_to_composer();
+                self.return_to_composer_insert_mode();
+                WidgetAction::None
+            }
+            KeyCode::Char(c)
+                if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'q') =>
+            {
+                self.return_to_composer_insert_mode();
+                WidgetAction::None
+            }
+            KeyCode::Char(c) if c.eq_ignore_ascii_case(&'d') => {
+                self.start_delete_confirmation();
+                WidgetAction::None
+            }
+            KeyCode::Esc => {
+                self.return_to_composer_insert_mode();
+                WidgetAction::None
+            }
             _ => WidgetAction::None,
         }
     }
@@ -379,6 +573,141 @@ impl ChatWidget {
             _ => {
                 self.pending_delete = None;
                 WidgetAction::None
+            }
+        }
+    }
+
+    fn handle_wq_failure_prompt_key(&mut self, key_event: KeyEvent) -> WidgetAction {
+        match key_event.code {
+            KeyCode::Enter => {
+                self.wq_failure_prompt = None;
+                WidgetAction::Quit
+            }
+            KeyCode::Char(c) if c.eq_ignore_ascii_case(&'q') || c.eq_ignore_ascii_case(&'y') => {
+                self.wq_failure_prompt = None;
+                WidgetAction::Quit
+            }
+            KeyCode::Esc => {
+                self.wq_failure_prompt = None;
+                self.set_status_message("Continue editing. Use w/s to retry.".to_string());
+                WidgetAction::None
+            }
+            KeyCode::Char(c) if c.eq_ignore_ascii_case(&'c') || c.eq_ignore_ascii_case(&'n') => {
+                self.wq_failure_prompt = None;
+                self.set_status_message("Continue editing. Use w/s to retry.".to_string());
+                WidgetAction::None
+            }
+            _ => WidgetAction::None,
+        }
+    }
+
+    fn handle_help_overlay_key(&mut self, key_event: KeyEvent) -> WidgetAction {
+        match key_event.code {
+            KeyCode::Esc => {
+                self.help_overlay = None;
+            }
+            KeyCode::Char('?') if is_plain_or_shift(key_event.modifiers) => {
+                self.help_overlay = None;
+            }
+            KeyCode::Char(c)
+                if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'q') =>
+            {
+                self.help_overlay = None;
+            }
+            _ => {}
+        }
+        WidgetAction::None
+    }
+
+    fn handle_normal_mode_command_key(&mut self, key_event: KeyEvent) -> Option<WidgetAction> {
+        if self.focus != FocusArea::Composer {
+            return None;
+        }
+        if self.bottom_pane.composer().vim_mode() != VimMode::Normal {
+            return None;
+        }
+        if !is_plain_or_shift(key_event.modifiers) {
+            return None;
+        }
+
+        let KeyCode::Char(c) = key_event.code else {
+            return None;
+        };
+
+        let action = match c {
+            '?' => {
+                self.help_overlay = Some(HelpOverlayContext::ComposerNormal);
+                WidgetAction::None
+            }
+            'w' | 's' => self.build_submit_action(false),
+            'W' => self.build_submit_action(true),
+            'q' => {
+                if self.composer_dirty {
+                    self.set_status_message("Unsaved changes. Use w/s, W, or Q.".to_string());
+                    WidgetAction::None
+                } else {
+                    WidgetAction::Quit
+                }
+            }
+            'Q' => WidgetAction::Quit,
+            'l' => {
+                self.page_mode = PageMode::MemoList;
+                self.focus = FocusArea::History;
+                WidgetAction::None
+            }
+            'p' => {
+                self.split_list_open = !self.split_list_open;
+                if !self.split_list_open && self.focus == FocusArea::History {
+                    self.focus = FocusArea::Composer;
+                }
+                self.set_status_message(if self.split_list_open {
+                    "Split list opened. Tab switches to list pane.".to_string()
+                } else {
+                    "Split list hidden.".to_string()
+                });
+                WidgetAction::None
+            }
+            _ => return None,
+        };
+
+        Some(action)
+    }
+
+    fn build_submit_action(&mut self, before_quit: bool) -> WidgetAction {
+        let text = self.bottom_pane.composer().text();
+        if before_quit {
+            self.wq_submission_in_progress = true;
+            self.wq_failure_prompt = None;
+            self.set_status_message("W submitting in background...".to_string());
+        } else {
+            self.set_status_message("w submitting...".to_string());
+        }
+
+        match &self.composer_mode {
+            ComposerMode::Create => {
+                if before_quit {
+                    WidgetAction::SubmitCreateBeforeQuit(text)
+                } else {
+                    WidgetAction::SubmitCreate(text)
+                }
+            }
+            ComposerMode::Edit {
+                memo_id,
+                expected_version,
+            } => {
+                if before_quit {
+                    WidgetAction::SubmitEditBeforeQuit {
+                        memo_id: memo_id.clone(),
+                        expected_version: expected_version.clone(),
+                        text,
+                    }
+                } else {
+                    WidgetAction::SubmitEdit {
+                        memo_id: memo_id.clone(),
+                        expected_version: expected_version.clone(),
+                        text,
+                    }
+                }
             }
         }
     }
@@ -435,6 +764,7 @@ impl ChatWidget {
         };
         self.bottom_pane.composer_mut().set_text(&cell.full_text);
         self.focus = FocusArea::Composer;
+        self.page_mode = PageMode::Composer;
         self.composer_mode = match (cell.memo_id, cell.memo_version) {
             (Some(memo_id), Some(expected_version)) => ComposerMode::Edit {
                 memo_id,
@@ -442,6 +772,7 @@ impl ChatWidget {
             },
             _ => ComposerMode::Create,
         };
+        self.set_clean_composer_text(&cell.full_text);
     }
 
     fn push_history(&mut self, full_text: String) {
@@ -499,7 +830,43 @@ impl ChatWidget {
     fn reset_composer_state(&mut self) {
         self.bottom_pane.composer_mut().clear();
         self.focus = FocusArea::Composer;
+        self.page_mode = PageMode::Composer;
         self.composer_mode = ComposerMode::Create;
+        self.set_clean_composer_text("");
+    }
+
+    fn set_clean_composer_text(&mut self, text: &str) {
+        self.clean_composer_text = text.to_string();
+        self.refresh_composer_dirty_state();
+    }
+
+    fn return_to_composer_insert_mode(&mut self) {
+        self.page_mode = PageMode::Composer;
+        self.focus = FocusArea::Composer;
+        self.bottom_pane.composer_mut().switch_to_insert_mode();
+    }
+
+    fn set_status_message(&mut self, message: String) {
+        self.status_message = Some(message);
+        self.status_message_expires_at = None;
+    }
+
+    fn set_temporary_status_message(&mut self, message: String, duration: Duration) {
+        self.status_message = Some(message);
+        self.status_message_expires_at = Some(Instant::now() + duration);
+    }
+
+    fn clear_status_message(&mut self) {
+        self.status_message = None;
+        self.status_message_expires_at = None;
+    }
+
+    fn show_submit_success_tip(&mut self) {
+        self.set_temporary_status_message("Submitted.".to_string(), SUBMIT_SUCCESS_TIP_DURATION);
+    }
+
+    fn refresh_composer_dirty_state(&mut self) {
+        self.composer_dirty = self.bottom_pane.composer().text() != self.clean_composer_text;
     }
 }
 
@@ -527,14 +894,29 @@ fn is_quit_key(key_event: KeyEvent) -> bool {
             code: KeyCode::Char(c),
             modifiers,
             ..
-        } if (modifiers.is_empty() || modifiers == KeyModifiers::SHIFT) && c.eq_ignore_ascii_case(&'q')
+        } if is_plain_or_shift(modifiers) && c.eq_ignore_ascii_case(&'q')
+    )
+}
+
+fn is_plain_or_shift(modifiers: KeyModifiers) -> bool {
+    modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
+}
+
+fn is_help_key(key_event: KeyEvent) -> bool {
+    matches!(
+        key_event,
+        KeyEvent {
+            code: KeyCode::Char('?'),
+            modifiers,
+            ..
+        } if is_plain_or_shift(modifiers)
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatWidget, WidgetAction};
-    use crate::supabase::{InsertedMemo, RecentMemo};
+    use super::{ChatWidget, HelpOverlayContext, PageMode, WidgetAction};
+    use crate::supabase::RecentMemo;
     use crate::tui::types::MAX_HISTORY_ITEMS;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -578,120 +960,13 @@ mod tests {
     }
 
     #[test]
-    fn hydrate_history_from_memos_uses_only_memos_and_respects_order() {
-        let mut widget = ChatWidget::new();
-        widget.hydrate_history_from_memos(vec![
-            RecentMemo {
-                id: "memo-newest".to_string(),
-                text: "memo-newest".to_string(),
-                created_at: "2026-02-23T03:00:00Z".to_string(),
-                version: "3".to_string(),
-                deleted_at: None,
-            },
-            RecentMemo {
-                id: "memo-middle".to_string(),
-                text: "memo-middle".to_string(),
-                created_at: "2026-02-23T02:00:00Z".to_string(),
-                version: "2".to_string(),
-                deleted_at: None,
-            },
-            RecentMemo {
-                id: "memo-oldest".to_string(),
-                text: "memo-oldest".to_string(),
-                created_at: "2026-02-23T01:00:00Z".to_string(),
-                version: "1".to_string(),
-                deleted_at: None,
-            },
-        ]);
-
-        assert_eq!(
-            history_texts(&widget),
-            vec![
-                "memo-oldest".to_string(),
-                "memo-middle".to_string(),
-                "memo-newest".to_string()
-            ]
-        );
-        assert_eq!(widget.selected_history(), Some(2));
-    }
-
-    #[test]
-    fn hydrate_history_from_memos_does_not_override_existing_history() {
-        let mut widget = ChatWidget::new();
-        widget.on_validation_error("local-entry");
-        widget.hydrate_history_from_memos(vec![
-            RecentMemo {
-                id: "memo-newest".to_string(),
-                text: "memo-newest".to_string(),
-                created_at: "2026-02-23T03:00:00Z".to_string(),
-                version: "3".to_string(),
-                deleted_at: None,
-            },
-            RecentMemo {
-                id: "memo-middle".to_string(),
-                text: "memo-middle".to_string(),
-                created_at: "2026-02-23T02:00:00Z".to_string(),
-                version: "2".to_string(),
-                deleted_at: None,
-            },
-            RecentMemo {
-                id: "memo-oldest".to_string(),
-                text: "memo-oldest".to_string(),
-                created_at: "2026-02-23T01:00:00Z".to_string(),
-                version: "1".to_string(),
-                deleted_at: None,
-            },
-        ]);
-
-        assert_eq!(history_texts(&widget), vec!["local-entry".to_string()]);
-    }
-
-    #[test]
-    fn hydrate_history_from_memos_skips_deleted_items() {
-        let mut widget = ChatWidget::new();
-        widget.hydrate_history_from_memos(vec![
-            RecentMemo {
-                id: "memo-newest-deleted".to_string(),
-                text: "memo-newest-deleted".to_string(),
-                created_at: "2026-02-23T04:00:00Z".to_string(),
-                version: "4".to_string(),
-                deleted_at: Some("2026-02-23T04:30:00Z".to_string()),
-            },
-            RecentMemo {
-                id: "memo-middle".to_string(),
-                text: "memo-middle".to_string(),
-                created_at: "2026-02-23T03:00:00Z".to_string(),
-                version: "3".to_string(),
-                deleted_at: None,
-            },
-            RecentMemo {
-                id: "memo-oldest".to_string(),
-                text: "memo-oldest".to_string(),
-                created_at: "2026-02-23T02:00:00Z".to_string(),
-                version: "2".to_string(),
-                deleted_at: None,
-            },
-        ]);
-
-        assert_eq!(
-            history_texts(&widget),
-            vec!["memo-oldest".to_string(), "memo-middle".to_string()]
-        );
-    }
-
-    #[test]
     fn history_enter_loads_edit_mode_without_duplicating_entry() {
         let mut widget = ChatWidget::new();
-        widget.hydrate_history_from_memos(vec![RecentMemo {
-            id: "memo-1".to_string(),
-            text: "memo-1".to_string(),
-            created_at: "2026-02-23T01:00:00Z".to_string(),
-            version: "7".to_string(),
-            deleted_at: None,
-        }]);
+        widget.hydrate_history_from_memos(vec![memo("memo-1", "memo-1", "7")]);
 
-        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        let action = widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        open_split_list(&mut widget);
+        widget.handle_key_event(key(KeyCode::Tab));
+        let action = widget.handle_key_event(key(KeyCode::Enter));
 
         assert_eq!(action, WidgetAction::None);
         assert_eq!(widget.history().len(), 1);
@@ -702,21 +977,15 @@ mod tests {
     #[test]
     fn submit_in_edit_mode_emits_submit_edit_action() {
         let mut widget = ChatWidget::new();
-        widget.hydrate_history_from_memos(vec![RecentMemo {
-            id: "memo-1".to_string(),
-            text: "memo-1".to_string(),
-            created_at: "2026-02-23T01:00:00Z".to_string(),
-            version: "7".to_string(),
-            deleted_at: None,
-        }]);
-        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        widget.hydrate_history_from_memos(vec![memo("memo-1", "memo-1", "7")]);
+        open_split_list(&mut widget);
+        widget.handle_key_event(key(KeyCode::Tab));
+        widget.handle_key_event(key(KeyCode::Enter));
 
-        let action = widget.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let action = widget.handle_key_event(key(KeyCode::Char('x')));
         assert_eq!(action, WidgetAction::None);
 
-        let submit =
-            widget.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        let submit = widget.handle_key_event(ctrl(KeyCode::Char('s')));
         assert_eq!(
             submit,
             WidgetAction::SubmitEdit {
@@ -728,167 +997,281 @@ mod tests {
     }
 
     #[test]
-    fn on_edit_success_updates_existing_history_and_resets_mode() {
-        let mut widget = ChatWidget::new();
-        widget.hydrate_history_from_memos(vec![RecentMemo {
-            id: "memo-1".to_string(),
-            text: "memo-1".to_string(),
-            created_at: "2026-02-23T01:00:00Z".to_string(),
-            version: "7".to_string(),
-            deleted_at: None,
-        }]);
-        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        widget.on_edit_success(&RecentMemo {
-            id: "memo-1".to_string(),
-            text: "memo-1 edited".to_string(),
-            created_at: "2026-02-23T01:00:00Z".to_string(),
-            version: "8".to_string(),
-            deleted_at: None,
-        });
-
-        assert_eq!(widget.history().len(), 1);
-        assert_eq!(history_texts(&widget), vec!["memo-1 edited".to_string()]);
-        assert!(!widget.is_editing_memo());
-        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "");
-    }
-
-    #[test]
-    fn on_edit_conflict_keeps_server_and_adds_fork() {
-        let mut widget = ChatWidget::new();
-        widget.hydrate_history_from_memos(vec![RecentMemo {
-            id: "memo-1".to_string(),
-            text: "memo-1".to_string(),
-            created_at: "2026-02-23T01:00:00Z".to_string(),
-            version: "7".to_string(),
-            deleted_at: None,
-        }]);
-
-        widget.on_edit_conflict(
-            &RecentMemo {
-                id: "memo-1".to_string(),
-                text: "server-latest".to_string(),
-                created_at: "2026-02-23T01:00:00Z".to_string(),
-                version: "9".to_string(),
-                deleted_at: None,
-            },
-            "my edited text",
-            &InsertedMemo {
-                id: "memo-fork".to_string(),
-                created_at: "2026-02-23T10:00:00Z".to_string(),
-                version: "1".to_string(),
-            },
-        );
-
-        assert_eq!(widget.history().len(), 2);
-        assert_eq!(
-            history_texts(&widget),
-            vec!["server-latest".to_string(), "my edited text".to_string()]
-        );
-        assert!(!widget.is_editing_memo());
-    }
-
-    #[test]
-    fn esc_requires_confirmation_before_quit() {
-        let mut widget = ChatWidget::new();
-        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-
-        let first = widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert_eq!(first, WidgetAction::None);
-        assert!(widget.quit_confirmation_pending());
-
-        let second = widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert_eq!(second, WidgetAction::Quit);
-    }
-
-    #[test]
-    fn esc_confirmation_resets_after_other_key() {
-        let mut widget = ChatWidget::new();
-        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-
-        let first = widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert_eq!(first, WidgetAction::None);
-        assert!(widget.quit_confirmation_pending());
-
-        let down = widget.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(down, WidgetAction::None);
-        assert!(!widget.quit_confirmation_pending());
-    }
-
-    #[test]
     fn q_quits_in_history() {
         let mut widget = ChatWidget::new();
-        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        open_split_list(&mut widget);
+        widget.handle_key_event(key(KeyCode::Tab));
 
-        let action = widget.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        let action = widget.handle_key_event(key(KeyCode::Char('q')));
         assert_eq!(action, WidgetAction::Quit);
     }
 
     #[test]
-    fn j_and_k_navigate_history_like_arrows() {
+    fn tab_does_not_switch_focus_when_split_list_closed() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Tab));
+        assert_eq!(widget.focus(), crate::tui::types::FocusArea::Composer);
+    }
+
+    #[test]
+    fn colon_still_inserts_text_in_insert_mode() {
+        let mut widget = ChatWidget::new();
+
+        let action = widget.handle_key_event(key(KeyCode::Char(':')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), ":");
+    }
+
+    #[test]
+    fn normal_mode_unmapped_keys_still_reach_composer() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('a')));
+        widget.handle_key_event(key(KeyCode::Char('b')));
+        widget.handle_key_event(key(KeyCode::Char('c')));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(key(KeyCode::Char('x')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "ab");
+    }
+
+    #[test]
+    fn command_w_submits_in_create_mode() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('h')));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(key(KeyCode::Char('w')));
+        assert_eq!(action, WidgetAction::SubmitCreate("h".to_string()));
+    }
+
+    #[test]
+    fn command_s_submits_in_create_mode() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('h')));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(key(KeyCode::Char('s')));
+        assert_eq!(action, WidgetAction::SubmitCreate("h".to_string()));
+    }
+
+    #[test]
+    fn command_s_submits_in_edit_mode() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![memo("memo-1", "memo-1", "7")]);
+        open_split_list(&mut widget);
+        widget.handle_key_event(key(KeyCode::Tab));
+        widget.handle_key_event(key(KeyCode::Enter));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(key(KeyCode::Char('s')));
+        assert_eq!(
+            action,
+            WidgetAction::SubmitEdit {
+                memo_id: "memo-1".to_string(),
+                expected_version: "7".to_string(),
+                text: "memo-1".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn command_shift_s_is_not_submit_alias() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('h')));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(shift_char('S'));
+        assert_eq!(action, WidgetAction::None);
+        assert!(!widget.wq_submission_in_progress());
+        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "h");
+    }
+
+    #[test]
+    fn command_q_blocks_when_dirty() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('h')));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(key(KeyCode::Char('q')));
+
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(
+            widget.status_message(),
+            Some("Unsaved changes. Use w/s, W, or Q.")
+        );
+    }
+
+    #[test]
+    fn command_shift_q_force_quits_even_when_dirty() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('h')));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(shift_char('Q'));
+
+        assert_eq!(action, WidgetAction::Quit);
+    }
+
+    #[test]
+    fn command_list_opens_list_page_and_enter_loads() {
         let mut widget = ChatWidget::new();
         widget.hydrate_history_from_memos(vec![
-            RecentMemo {
-                id: "memo-2".to_string(),
-                text: "memo-2".to_string(),
-                created_at: "2026-02-23T02:00:00Z".to_string(),
-                version: "2".to_string(),
-                deleted_at: None,
-            },
-            RecentMemo {
-                id: "memo-1".to_string(),
-                text: "memo-1".to_string(),
-                created_at: "2026-02-23T01:00:00Z".to_string(),
-                version: "1".to_string(),
-                deleted_at: None,
-            },
+            memo("memo-2", "memo-2", "2"),
+            memo("memo-1", "memo-1", "1"),
         ]);
-        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(widget.selected_history(), Some(1));
+        widget.handle_key_event(key(KeyCode::Esc));
 
-        widget.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-        assert_eq!(widget.selected_history(), Some(0));
-
-        widget.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-        assert_eq!(widget.selected_history(), Some(1));
-    }
-
-    #[test]
-    fn q_in_composer_keeps_typing() {
-        let mut widget = ChatWidget::new();
-
-        let action = widget.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        let action = widget.handle_key_event(key(KeyCode::Char('l')));
         assert_eq!(action, WidgetAction::None);
-        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "q");
+        assert_eq!(widget.page_mode(), PageMode::MemoList);
+
+        widget.handle_key_event(key(KeyCode::Up));
+        widget.handle_key_event(key(KeyCode::Enter));
+
+        assert_eq!(widget.page_mode(), PageMode::Composer);
+        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "memo-1");
+        assert!(widget.bottom_pane_mut().composer_mut().is_insert_mode());
     }
 
     #[test]
-    fn r_in_history_emits_refresh_history_action() {
+    fn help_opens_in_composer_normal_mode() {
         let mut widget = ChatWidget::new();
-        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = widget.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
-        assert_eq!(action, WidgetAction::RefreshHistory);
+        let action = widget.handle_key_event(key(KeyCode::Char('?')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(
+            widget.help_overlay(),
+            Some(HelpOverlayContext::ComposerNormal)
+        );
     }
 
     #[test]
-    fn d_starts_confirmation_and_enter_confirms_delete() {
+    fn help_opens_in_memo_list_page() {
         let mut widget = ChatWidget::new();
-        widget.hydrate_history_from_memos(vec![RecentMemo {
-            id: "memo-1".to_string(),
-            text: "memo-1".to_string(),
-            created_at: "2026-02-23T01:00:00Z".to_string(),
-            version: "1".to_string(),
-            deleted_at: None,
-        }]);
-        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
 
-        let first = widget.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        let action = widget.handle_key_event(key(KeyCode::Char('?')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.help_overlay(), Some(HelpOverlayContext::MemoList));
+    }
+
+    #[test]
+    fn help_overlay_closes_on_question_esc_or_q() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        assert!(widget.help_overlay().is_some());
+
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        assert_eq!(widget.help_overlay(), None);
+
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        assert!(widget.help_overlay().is_some());
+        widget.handle_key_event(key(KeyCode::Esc));
+        assert_eq!(widget.help_overlay(), None);
+
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        assert!(widget.help_overlay().is_some());
+        widget.handle_key_event(key(KeyCode::Char('q')));
+        assert_eq!(widget.help_overlay(), None);
+    }
+
+    #[test]
+    fn help_overlay_blocks_commands_until_closed() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('h')));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        assert_eq!(
+            widget.help_overlay(),
+            Some(HelpOverlayContext::ComposerNormal)
+        );
+
+        let blocked = widget.handle_key_event(key(KeyCode::Char('w')));
+        assert_eq!(blocked, WidgetAction::None);
+        assert!(!widget.wq_submission_in_progress());
+        assert_eq!(
+            widget.help_overlay(),
+            Some(HelpOverlayContext::ComposerNormal)
+        );
+
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        let submit = widget.handle_key_event(key(KeyCode::Char('w')));
+        assert_eq!(submit, WidgetAction::SubmitCreate("h".to_string()));
+    }
+
+    #[test]
+    fn q_with_memo_list_help_open_closes_help_only() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+        widget.handle_key_event(key(KeyCode::Char('?')));
+        assert_eq!(widget.help_overlay(), Some(HelpOverlayContext::MemoList));
+
+        let action = widget.handle_key_event(key(KeyCode::Char('q')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.help_overlay(), None);
+        assert_eq!(widget.page_mode(), PageMode::MemoList);
+    }
+
+    #[test]
+    fn enter_in_memo_list_without_selection_returns_to_insert_mode() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        assert!(!widget.bottom_pane_mut().composer_mut().is_insert_mode());
+
+        open_memo_list(&mut widget);
+        let action = widget.handle_key_event(key(KeyCode::Enter));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.page_mode(), PageMode::Composer);
+        assert!(widget.bottom_pane_mut().composer_mut().is_insert_mode());
+    }
+
+    #[test]
+    fn q_in_memo_list_returns_to_composer_page() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![memo("memo-1", "memo-1", "1")]);
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+        assert_eq!(widget.page_mode(), PageMode::MemoList);
+        assert!(!widget.bottom_pane_mut().composer_mut().is_insert_mode());
+
+        let action = widget.handle_key_event(key(KeyCode::Char('q')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.page_mode(), PageMode::Composer);
+        assert!(widget.bottom_pane_mut().composer_mut().is_insert_mode());
+    }
+
+    #[test]
+    fn esc_in_memo_list_returns_to_composer_insert_mode() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+        assert_eq!(widget.page_mode(), PageMode::MemoList);
+        assert!(!widget.bottom_pane_mut().composer_mut().is_insert_mode());
+
+        let action = widget.handle_key_event(key(KeyCode::Esc));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.page_mode(), PageMode::Composer);
+        assert!(widget.bottom_pane_mut().composer_mut().is_insert_mode());
+    }
+
+    #[test]
+    fn d_in_memo_list_starts_confirmation_and_enter_confirms_delete() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![memo("memo-1", "memo-1", "1")]);
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        let first = widget.handle_key_event(key(KeyCode::Char('d')));
         assert_eq!(first, WidgetAction::None);
         assert_eq!(widget.delete_confirmation_text(), Some("memo-1"));
 
-        let second = widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let second = widget.handle_key_event(key(KeyCode::Enter));
         assert_eq!(
             second,
             WidgetAction::DeleteMemo {
@@ -896,101 +1279,70 @@ mod tests {
                 expected_version: "1".to_string(),
             }
         );
-        assert_eq!(widget.delete_confirmation_text(), None);
     }
 
     #[test]
-    fn delete_confirmation_esc_cancels() {
+    fn command_splitlist_toggles_split_layout() {
         let mut widget = ChatWidget::new();
-        widget.hydrate_history_from_memos(vec![RecentMemo {
-            id: "memo-1".to_string(),
-            text: "memo-1".to_string(),
-            created_at: "2026-02-23T01:00:00Z".to_string(),
-            version: "1".to_string(),
-            deleted_at: None,
-        }]);
-        widget.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        widget.handle_key_event(key(KeyCode::Esc));
 
-        widget.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
-        assert_eq!(widget.delete_confirmation_text(), Some("memo-1"));
+        widget.handle_key_event(key(KeyCode::Char('p')));
+        assert!(widget.split_list_open());
 
-        let action = widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert_eq!(action, WidgetAction::None);
-        assert_eq!(widget.delete_confirmation_text(), None);
-        assert!(!widget.quit_confirmation_pending());
+        widget.handle_key_event(key(KeyCode::Char('p')));
+        assert!(!widget.split_list_open());
     }
 
     #[test]
-    fn on_delete_conflict_updates_with_server_memo_if_not_deleted() {
+    fn command_shift_w_emits_background_submit_action() {
         let mut widget = ChatWidget::new();
-        widget.hydrate_history_from_memos(vec![RecentMemo {
-            id: "memo-1".to_string(),
-            text: "memo-1".to_string(),
-            created_at: "2026-02-23T01:00:00Z".to_string(),
-            version: "1".to_string(),
-            deleted_at: None,
-        }]);
+        widget.handle_key_event(key(KeyCode::Char('h')));
+        widget.handle_key_event(key(KeyCode::Esc));
 
-        widget.on_delete_conflict(&RecentMemo {
-            id: "memo-1".to_string(),
-            text: "server-updated".to_string(),
-            created_at: "2026-02-23T02:00:00Z".to_string(),
-            version: "2".to_string(),
-            deleted_at: None,
-        });
-
-        assert_eq!(history_texts(&widget), vec!["server-updated".to_string()]);
-    }
-
-    #[test]
-    fn on_delete_conflict_removes_when_server_already_deleted() {
-        let mut widget = ChatWidget::new();
-        widget.hydrate_history_from_memos(vec![RecentMemo {
-            id: "memo-1".to_string(),
-            text: "memo-1".to_string(),
-            created_at: "2026-02-23T01:00:00Z".to_string(),
-            version: "1".to_string(),
-            deleted_at: None,
-        }]);
-
-        widget.on_delete_conflict(&RecentMemo {
-            id: "memo-1".to_string(),
-            text: "memo-1".to_string(),
-            created_at: "2026-02-23T02:00:00Z".to_string(),
-            version: "2".to_string(),
-            deleted_at: Some("2026-02-23T02:00:00Z".to_string()),
-        });
-
-        assert!(widget.history().is_empty());
-    }
-
-    #[test]
-    fn refresh_history_from_memos_replaces_existing_entries() {
-        let mut widget = ChatWidget::new();
-        widget.on_submit_success("memo-1", "memo-1", "2026-02-23T01:00:00Z", "1");
-        widget.on_validation_error("local-entry");
-
-        widget.refresh_history_from_memos(vec![
-            RecentMemo {
-                id: "memo-3".to_string(),
-                text: "memo-3".to_string(),
-                created_at: "2026-02-23T03:00:00Z".to_string(),
-                version: "3".to_string(),
-                deleted_at: None,
-            },
-            RecentMemo {
-                id: "memo-2".to_string(),
-                text: "memo-2".to_string(),
-                created_at: "2026-02-23T02:00:00Z".to_string(),
-                version: "2".to_string(),
-                deleted_at: None,
-            },
-        ]);
+        let action = widget.handle_key_event(shift_char('W'));
 
         assert_eq!(
-            history_texts(&widget),
-            vec!["memo-2".to_string(), "memo-3".to_string()]
+            action,
+            WidgetAction::SubmitCreateBeforeQuit("h".to_string())
         );
+        assert!(widget.wq_submission_in_progress());
+    }
+
+    #[test]
+    fn wq_failure_prompt_can_cancel_or_quit() {
+        let mut widget = ChatWidget::new();
+        widget.on_wq_submission_failed("network error");
+        assert!(widget.wq_failure_prompt().is_some());
+
+        let cancel = widget.handle_key_event(key(KeyCode::Char('c')));
+        assert_eq!(cancel, WidgetAction::None);
+        assert!(widget.wq_failure_prompt().is_none());
+
+        widget.on_wq_submission_failed("network error");
+        let quit = widget.handle_key_event(key(KeyCode::Enter));
+        assert_eq!(quit, WidgetAction::Quit);
+    }
+
+    #[test]
+    fn esc_in_composer_insert_switches_mode_and_primes_quit_confirmation() {
+        let mut widget = ChatWidget::new();
+
+        let action = widget.handle_key_event(key(KeyCode::Esc));
+        assert_eq!(action, WidgetAction::None);
+        assert!(widget.quit_confirmation_pending());
+        assert!(!widget.bottom_pane_mut().composer_mut().is_insert_mode());
+    }
+
+    #[test]
+    fn esc_twice_from_composer_insert_quits() {
+        let mut widget = ChatWidget::new();
+
+        let first = widget.handle_key_event(key(KeyCode::Esc));
+        assert_eq!(first, WidgetAction::None);
+        assert!(widget.quit_confirmation_pending());
+
+        let second = widget.handle_key_event(key(KeyCode::Esc));
+        assert_eq!(second, WidgetAction::Quit);
     }
 
     fn history_texts(widget: &ChatWidget) -> Vec<String> {
@@ -999,5 +1351,36 @@ mod tests {
             .iter()
             .map(|cell| cell.full_text.clone())
             .collect()
+    }
+
+    fn memo(id: &str, text: &str, version: &str) -> RecentMemo {
+        RecentMemo {
+            id: id.to_string(),
+            text: text.to_string(),
+            created_at: "2026-02-23T01:00:00Z".to_string(),
+            version: version.to_string(),
+            deleted_at: None,
+        }
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    fn shift_char(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT)
+    }
+
+    fn open_memo_list(widget: &mut ChatWidget) {
+        widget.handle_key_event(key(KeyCode::Char('l')));
+    }
+
+    fn open_split_list(widget: &mut ChatWidget) {
+        widget.handle_key_event(key(KeyCode::Esc));
+        widget.handle_key_event(key(KeyCode::Char('p')));
     }
 }

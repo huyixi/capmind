@@ -1,0 +1,64 @@
+name: db-security-check
+
+on:
+  push:
+    paths:
+      - "supabase/**"
+      - ".github/workflows/db-security-check.yml"
+  pull_request:
+    paths:
+      - "supabase/**"
+      - ".github/workflows/db-security-check.yml"
+  workflow_dispatch:
+
+jobs:
+  verify-db-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required DB secrets
+        env:
+          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
+          PGUSER: ${{ secrets.SUPABASE_DB_USER }}
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
+        run: |
+          missing=0
+          for var_name in PGHOST PGUSER PGPASSWORD; do
+            if [ -z "${!var_name}" ]; then
+              echo "::error::${var_name} is not configured."
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            echo "Set repository secrets SUPABASE_DB_HOST, SUPABASE_DB_USER, SUPABASE_DB_PASSWORD."
+            exit 1
+          fi
+      - name: Ensure psql is installed
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Run DB security checks
+        env:
+          PGSSLMODE: require
+          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
+          PGUSER: ${{ secrets.SUPABASE_DB_USER }}
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
+        run: |
+          : "${PGPORT:=5432}"
+          : "${PGDATABASE:=postgres}"
+          psql \
+            -h "$PGHOST" \
+            -p "$PGPORT" \
+            -U "$PGUSER" \
+            -d "$PGDATABASE" \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/sql/security_checks.sql

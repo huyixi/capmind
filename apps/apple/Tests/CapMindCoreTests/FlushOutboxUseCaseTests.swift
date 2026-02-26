@@ -228,7 +228,7 @@ private actor MockMemoRepository: MemoRepository {
             )
         )
         if conflictOnUpdate {
-            throw CapMindError.conflict(serverMemo: nil)
+            throw CapMindError.conflict(serverMemo: nil, forkedMemo: nil)
         }
 
         return MemoEntity(

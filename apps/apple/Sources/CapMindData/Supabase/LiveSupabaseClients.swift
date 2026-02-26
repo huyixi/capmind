@@ -171,102 +171,122 @@ public struct LiveSupabaseMemoClient: SupabaseMemoClientProtocol {
 
     public func updateMemo(
         id: String,
-        userID: String,
+        userID _: String,
         text: String,
         expectedVersion: String,
         imagePaths: [String]?
     ) async throws -> MemoEntity {
-        let nextVersion = MemoVersion.next(expectedVersion)
-        let payload = MemoUpdateRow(text: text, updatedAt: Date(), version: nextVersion)
+        let normalizedExpected = MemoVersion.normalizeExpected(expectedVersion)
+        let normalizedImagePaths = imagePaths.map {
+            $0.compactMap { normalizeStoragePath(raw: $0, bucket: memoImagesBucket) }
+        }
 
-        let response: PostgrestResponse<[MemoRow]> = try await client
-            .from("memos")
-            .update(payload)
-            .eq("id", value: id)
-            .eq("user_id", value: userID)
-            .eq("version", value: expectedVersion)
-            .select(memoSelectFields)
+        let rpcPayload = MemoUpdateResolveConflictRPCRequest(
+            argMemoID: id,
+            argText: text,
+            argExpectedVersion: normalizedExpected,
+            argImageURLs: normalizedImagePaths
+        )
+        let result: MemoResolveRPCPayload = try await client
+            .rpc("memo_update_resolve_conflict", params: rpcPayload)
+            .single()
             .execute()
+            .value
 
-        if response.value.isEmpty {
-            let existing = try await fetchMemo(id: id, userID: userID)
-            if existing == nil {
+        switch result.status {
+        case .updated:
+            guard let memo = result.memo else {
+                throw CapMindError.network(message: "Updated memo payload missing from RPC response")
+            }
+            return try await memoEntity(from: memo)
+
+        case .conflict:
+            let serverMemo: MemoEntity?
+            if let payload = result.serverMemo {
+                serverMemo = try await memoEntity(from: payload)
+            } else {
+                serverMemo = nil
+            }
+
+            let forkedMemo: MemoEntity?
+            if let payload = result.forkedMemo {
+                forkedMemo = try await memoEntity(from: payload)
+            } else {
+                forkedMemo = nil
+            }
+
+            if serverMemo == nil {
                 throw CapMindError.notFound
             }
-            throw CapMindError.conflict(serverMemo: existing)
+            throw CapMindError.conflict(serverMemo: serverMemo, forkedMemo: forkedMemo)
+
+        case .notFound:
+            throw CapMindError.notFound
+
+        case .deleted, .restored:
+            throw CapMindError.network(message: "Unexpected update RPC status: \(result.status.rawValue)")
         }
-
-        if let imagePaths {
-            _ = try await client
-                .from("memo_images")
-                .delete()
-                .eq("memo_id", value: id)
-                .execute()
-
-            let normalized = imagePaths.compactMap { normalizeStoragePath(raw: $0, bucket: memoImagesBucket) }
-            if !normalized.isEmpty {
-                let payload = normalized.enumerated().map { index, path in
-                    MemoImageInsertRow(memoID: id, url: path, sortOrder: index)
-                }
-                _ = try await client.from("memo_images").insert(payload).execute()
-            }
-        }
-
-        if let fetched = try await fetchMemo(id: id, userID: userID) {
-            return fetched
-        }
-
-        throw CapMindError.network(message: "Updated memo not found")
     }
 
     public func deleteMemo(
         id: String,
-        userID: String,
+        userID _: String,
         expectedVersion: String,
         deletedAt: Date
     ) async throws -> MemoEntity? {
-        let nextVersion = MemoVersion.next(expectedVersion)
-        let payload = MemoDeleteRow(deletedAt: deletedAt, updatedAt: deletedAt, version: nextVersion)
-
-        let response: PostgrestResponse<[MemoIDRow]> = try await client
-            .from("memos")
-            .update(payload)
-            .eq("id", value: id)
-            .eq("user_id", value: userID)
-            .eq("version", value: expectedVersion)
-            .select("id")
+        let rpcPayload = MemoDeleteResolveConflictRPCRequest(
+            argMemoID: id,
+            argExpectedVersion: MemoVersion.normalizeExpected(expectedVersion),
+            argDeletedAt: deletedAt
+        )
+        let result: MemoResolveRPCPayload = try await client
+            .rpc("memo_delete_resolve_conflict", params: rpcPayload)
+            .single()
             .execute()
+            .value
 
-        if response.value.isEmpty {
+        switch result.status {
+        case .deleted:
             return nil
+        case .conflict:
+            return nil
+        case .notFound:
+            throw CapMindError.notFound
+        case .updated, .restored:
+            throw CapMindError.network(message: "Unexpected delete RPC status: \(result.status.rawValue)")
         }
-
-        return try await fetchMemo(id: id, userID: userID)
     }
 
     public func restoreMemo(
         id: String,
-        userID: String,
+        userID _: String,
         expectedVersion: String,
         restoredAt: Date
     ) async throws -> MemoEntity? {
-        let nextVersion = MemoVersion.next(expectedVersion)
-        let payload = MemoRestoreRow(updatedAt: restoredAt, version: nextVersion)
-
-        let response: PostgrestResponse<[MemoIDRow]> = try await client
-            .from("memos")
-            .update(payload)
-            .eq("id", value: id)
-            .eq("user_id", value: userID)
-            .eq("version", value: expectedVersion)
-            .select("id")
+        let rpcPayload = MemoRestoreResolveConflictRPCRequest(
+            argMemoID: id,
+            argExpectedVersion: MemoVersion.normalizeExpected(expectedVersion),
+            argRestoredAt: restoredAt
+        )
+        let result: MemoResolveRPCPayload = try await client
+            .rpc("memo_restore_resolve_conflict", params: rpcPayload)
+            .single()
             .execute()
+            .value
 
-        if response.value.isEmpty {
+        switch result.status {
+        case .restored:
+            guard let memo = result.memo else {
+                throw CapMindError.network(message: "Restored memo payload missing from RPC response")
+            }
+            return try await memoEntity(from: memo)
+        case .conflict:
             return nil
+        case .notFound:
+            throw CapMindError.notFound
+        case .updated, .deleted:
+            throw CapMindError.network(message: "Unexpected restore RPC status: \(result.status.rawValue)")
         }
-
-        return try await fetchMemo(id: id, userID: userID)
     }
 
     public func fetchMemo(id: String, userID: String) async throws -> MemoEntity? {
@@ -366,6 +386,30 @@ public struct LiveSupabaseMemoClient: SupabaseMemoClientProtocol {
         }
     }
 
+    private func memoEntity(from payload: MemoRPCPayload) async throws -> MemoEntity {
+        let sortedImages = (payload.memoImages ?? []).sorted { lhs, rhs in
+            let left = lhs.sortOrder ?? Int.max
+            let right = rhs.sortOrder ?? Int.max
+            return left < right
+        }
+        let rawPaths = sortedImages.map(\.url)
+        let resolved = try await createSignedImageURLs(rawPaths: rawPaths)
+
+        return MemoEntity(
+            id: payload.id,
+            clientID: nil,
+            userID: payload.userID,
+            text: payload.text,
+            images: resolved,
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt,
+            version: payload.version,
+            deletedAt: payload.deletedAt,
+            serverVersion: payload.version,
+            conflictType: nil
+        )
+    }
+
     private func requireCurrentUserID() async throws -> String {
         if let user = client.auth.currentUser {
             return user.id.uuidString.lowercased()
@@ -459,42 +503,6 @@ private struct MemoInsertRow: Encodable {
     }
 }
 
-private struct MemoUpdateRow: Encodable {
-    let text: String
-    let updatedAt: Date
-    let version: String
-
-    enum CodingKeys: String, CodingKey {
-        case text
-        case updatedAt = "updated_at"
-        case version
-    }
-}
-
-private struct MemoDeleteRow: Encodable {
-    let deletedAt: Date
-    let updatedAt: Date
-    let version: String
-
-    enum CodingKeys: String, CodingKey {
-        case deletedAt = "deleted_at"
-        case updatedAt = "updated_at"
-        case version
-    }
-}
-
-private struct MemoRestoreRow: Encodable {
-    let updatedAt: Date
-    let version: String
-    let deletedAt: Date? = nil
-
-    enum CodingKeys: String, CodingKey {
-        case updatedAt = "updated_at"
-        case version
-        case deletedAt = "deleted_at"
-    }
-}
-
 private struct MemoImageInsertRow: Encodable {
     let memoID: String
     let url: String
@@ -507,8 +515,42 @@ private struct MemoImageInsertRow: Encodable {
     }
 }
 
-private struct MemoIDRow: Decodable {
-    let id: String
+private struct MemoUpdateResolveConflictRPCRequest: Encodable {
+    let argMemoID: String
+    let argText: String
+    let argExpectedVersion: String
+    let argImageURLs: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case argMemoID = "arg_memo_id"
+        case argText = "arg_text"
+        case argExpectedVersion = "arg_expected_version"
+        case argImageURLs = "arg_image_urls"
+    }
+}
+
+private struct MemoDeleteResolveConflictRPCRequest: Encodable {
+    let argMemoID: String
+    let argExpectedVersion: String
+    let argDeletedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case argMemoID = "arg_memo_id"
+        case argExpectedVersion = "arg_expected_version"
+        case argDeletedAt = "arg_deleted_at"
+    }
+}
+
+private struct MemoRestoreResolveConflictRPCRequest: Encodable {
+    let argMemoID: String
+    let argExpectedVersion: String
+    let argRestoredAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case argMemoID = "arg_memo_id"
+        case argExpectedVersion = "arg_expected_version"
+        case argRestoredAt = "arg_restored_at"
+    }
 }
 
 private struct MemoRow: Decodable {

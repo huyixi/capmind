@@ -40,6 +40,12 @@ The CLI auto-loads env files in this order (first found values are used):
 cargo run --
 ```
 
+Open list page directly:
+
+```bash
+cargo run -- list
+```
+
 TUI keys:
 
 - `Enter`: insert newline
@@ -47,24 +53,39 @@ TUI keys:
 - `Alt+Enter`: submit memo
 - `Shift+Enter`: submit memo
 - `Ctrl+S`: submit memo (fallback for terminals that don't emit `Ctrl+Enter`)
-- `Tab`: switch focus between Composer (top) and History (bottom) panes
+- Composer vim mode: starts in `INSERT`, `Esc` switches to `NORMAL`
+- `Esc` in `NORMAL` (or outside Composer insert mode): press twice to quit TUI (with confirmation)
+- `NORMAL` mode navigation/edit keys: arrows, `h`/`j`/`k`/`l`, `b`, `0`, `$`, `i`/`a`/`I`/`A`/`o`/`O`, `x`, `dd`
+- `NORMAL` mode direct commands (no `:`):
+  - `w`/`s`: submit and stay
+  - `W`: submit in background (up to 3 attempts, retry delays `1s`, `3s`) and quit on success
+  - `q`: quit only if no unsaved changes
+  - `Q`: quit without submit
+  - `l`: open full-page memo list
+  - `p`: toggle split composer+history layout
+  - `?`: open help popup (`?` / `Esc` / `q` to close)
+- `Tab`: switch focus between Composer and History panes (only when split layout is open)
 - `↑` / `k` (in History): move selection up
 - `↓` / `j` (in History): move selection down
 - `Enter` (in History): load selected memo into Composer for edit mode
 - `q` (in History): quit TUI
 - `r` (in History): refresh memo list
-- `Esc`: press twice to quit TUI (with confirmation)
 - `Ctrl+C`: quit TUI immediately
 - `d` (in History): open delete confirmation for selected memo
 - `Enter` / `y` / `d` (in delete confirmation): confirm delete
 - `n` / `Esc` (in delete confirmation): cancel delete
+- Memo list page: `j`/`k` or `↑`/`↓` move, `Enter` loads selected memo into composer, `d` opens delete confirmation, `q` or `Esc` returns to composer page, `?` opens help popup
+
+Composer page starts in single-pane mode (no history pane shown).
+Use `p` in `NORMAL` mode when you want to show the split composer/history layout.
 
 TUI history keeps up to the latest 100 entries.
 Latest memos are loaded into history in the background after startup (non-blocking).
 Submitting from History edit mode updates the original memo by version.
-On version conflict, CLI follows Web behavior: keep server-latest memo and fork your edits into a new memo.
+On version conflict, CLI follows Web behavior: conflict is resolved by backend RPC, keeping server-latest memo and forking your edits into a new memo.
 Deleting from History is a soft delete (`deleted_at` + version bump), aligned with Web behavior.
-On delete conflict, CLI refreshes that memo from server state instead of hard-removing it.
+On delete conflict, CLI resolves via backend RPC and refreshes that memo from server state instead of hard-removing it.
+If `W` fails after the final retry, the UI prompts to either quit without submit or continue editing.
 
 ### 2) Login (interactive, one-time)
 
@@ -98,6 +119,24 @@ Shortcut scope is intentionally narrow: only a single positional text argument i
 echo "hello from stdin" | cargo run -- add
 ```
 
+### 6) Self-update with checksum verification
+
+Update to latest release:
+
+```bash
+cargo run -- self-update
+```
+
+Update to a specific version:
+
+```bash
+cargo run -- self-update --version 0.2.1
+```
+
+`self-update` downloads the platform binary and `SHA256SUMS` from GitHub Release,
+verifies SHA-256 before replacing the executable, and rolls back automatically if
+replacement fails.
+
 ## Auth/session behavior
 
 - CLI first attempts refresh-token login from `~/.capmind/auth.json`.
@@ -122,3 +161,7 @@ echo "hello from stdin" | cargo run -- add
   - Run `cargo run -- login` once.
 - `Insert memo failed (401/403...)`:
   - Check RLS policy for `memos` and ensure `user_id` matches `auth.uid()`.
+- `Self-update failed: checksum mismatch`:
+  - Ensure the release includes `SHA256SUMS` and the matching platform binary.
+- `Self-update failed: move current binary to backup`:
+  - Current executable path is not writable. Re-run with proper permissions.

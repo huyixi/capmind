@@ -158,85 +158,6 @@ export function useMemoMutations({
     [supabase],
   );
 
-  const fetchMemoImagePaths = useCallback(
-    async (memoId: string): Promise<string[]> => {
-      const { data, error } = await supabase
-        .from("memo_images")
-        .select("url, sort_order")
-        .eq("memo_id", memoId)
-        .order("sort_order", { ascending: true });
-
-      if (error) {
-        console.error("Error fetching memo image paths:", error);
-        return [];
-      }
-
-      return (data ?? []).map((row) => row.url);
-    },
-    [supabase],
-  );
-
-  const forkMemoFromConflict = useCallback(
-    async (payload: {
-      sourceMemoId: string;
-      text: string;
-    }): Promise<Memo | null> => {
-      if (!initialUser) return null;
-
-      const { data: newMemo, error } = await supabase
-        .from("memos")
-        .insert({
-          user_id: initialUser.id,
-          text: payload.text,
-        })
-        .select(
-          "id, user_id, text, created_at, updated_at, version, deleted_at",
-        )
-        .single();
-
-      if (error || !newMemo) {
-        console.error("Error creating forked memo:", error);
-        return null;
-      }
-
-      const rawImageUrls = await fetchMemoImagePaths(payload.sourceMemoId);
-      let displayUrls: string[] = [];
-      if (rawImageUrls.length > 0) {
-        const { error: imageError } = await supabase.from("memo_images").insert(
-          rawImageUrls.map((url, index) => ({
-            memo_id: newMemo.id,
-            url,
-            sort_order: index,
-          })),
-        );
-
-        if (imageError) {
-          console.error("Error copying memo images:", imageError);
-        } else {
-          displayUrls = await createSignedImageUrls(
-            supabase,
-            MEMO_IMAGES_BUCKET,
-            rawImageUrls,
-            MEMO_IMAGE_URL_TTL_SECONDS,
-          );
-        }
-      }
-
-      const normalizedVersion = normalizeMemoVersion(newMemo.version);
-      return {
-        ...newMemo,
-        version: normalizedVersion,
-        images: displayUrls,
-        deleted_at: newMemo.deleted_at ?? null,
-        serverVersion: normalizedVersion,
-        hasConflict: false,
-        conflictServerMemo: undefined,
-        conflictType: undefined,
-      };
-    },
-    [fetchMemoImagePaths, initialUser, supabase],
-  );
-
   const fetchServerMemo = useCallback(
     async (memoId: string): Promise<Memo | null> => {
       if (!initialUser) return null;
@@ -548,14 +469,11 @@ export function useMemoMutations({
             if (response.status === 409) {
               const responsePayload = await response.json();
               let serverMemo = responsePayload?.memo as Memo | undefined;
+              const forkedMemo = responsePayload?.forkedMemo as Memo | undefined;
               if (!serverMemo) {
                 const fetched = await fetchServerMemo(payload.id);
                 serverMemo = fetched ?? undefined;
               }
-              const forkedMemo = await forkMemoFromConflict({
-                sourceMemoId: payload.id,
-                text: trimmedText,
-              });
               let nextPages = resolvePages(current);
               if (serverMemo) {
                 const normalizedVersion = normalizeMemoVersion(
@@ -575,8 +493,24 @@ export function useMemoMutations({
                   nextPages = removeMemo(nextPages, payload.id);
                 }
               }
-              if (forkedMemo && shouldShowMemo(forkedMemo)) {
-                nextPages = insertMemo(nextPages, forkedMemo);
+              if (forkedMemo) {
+                const normalizedForkedVersion = normalizeMemoVersion(
+                  forkedMemo.version,
+                );
+                const nextForkedMemo = {
+                  ...forkedMemo,
+                  version: normalizedForkedVersion,
+                  serverVersion: normalizedForkedVersion,
+                  hasConflict: false,
+                  conflictServerMemo: undefined,
+                  conflictType: undefined,
+                };
+                if (shouldShowMemo(nextForkedMemo)) {
+                  nextPages = insertMemo(nextPages, nextForkedMemo);
+                }
+              }
+              if (!serverMemo && !forkedMemo) {
+                throw new Error("Conflict response missing memo payload");
               }
               return nextPages;
             }
@@ -629,7 +563,6 @@ export function useMemoMutations({
     [
       cleanupOptimisticImages,
       fetchServerMemo,
-      forkMemoFromConflict,
       initialUser,
       insertMemo,
       isOnline,
@@ -873,7 +806,6 @@ export function useMemoMutations({
   return {
     cleanupOptimisticImages,
     fetchServerMemo,
-    forkMemoFromConflict,
     handleDelete,
     handleRestore,
     handleSubmit,
