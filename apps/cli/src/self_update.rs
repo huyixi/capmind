@@ -62,16 +62,9 @@ async fn run_self_update_with_config(
         None => resolve_latest_release_tag(&client, config.releases_url).await?,
     };
 
-    let binary_url = release_asset_url(
-        config.releases_url,
-        Some(&release_tag),
-        platform_asset,
-    );
-    let checksums_url = release_asset_url(
-        config.releases_url,
-        Some(&release_tag),
-        CHECKSUM_ASSET_NAME,
-    );
+    let binary_url = release_asset_url(config.releases_url, Some(&release_tag), platform_asset);
+    let checksums_url =
+        release_asset_url(config.releases_url, Some(&release_tag), CHECKSUM_ASSET_NAME);
 
     let checksums = download_asset_text(&client, &checksums_url).await?;
     let binary_bytes = download_asset_bytes(&client, &binary_url).await?;
@@ -118,9 +111,8 @@ fn release_asset_url(releases_url: &str, target_tag: Option<&str>, asset_name: &
 }
 
 fn latest_release_api_url(releases_url: &str) -> Result<String, AppError> {
-    let parsed = reqwest::Url::parse(releases_url).map_err(|err| {
-        AppError::Api(format!("Invalid releases URL `{releases_url}`: {err}"))
-    })?;
+    let parsed = reqwest::Url::parse(releases_url)
+        .map_err(|err| AppError::Api(format!("Invalid releases URL `{releases_url}`: {err}")))?;
     let segments: Vec<_> = parsed
         .path_segments()
         .map(|v| v.collect())
@@ -192,10 +184,7 @@ async fn download_asset_text(client: &reqwest::Client, url: &str) -> Result<Stri
         .map_err(|err| AppError::Network(format!("Failed to read asset `{url}`: {err}")))
 }
 
-async fn download_asset_bytes(
-    client: &reqwest::Client,
-    url: &str,
-) -> Result<Vec<u8>, AppError> {
+async fn download_asset_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, AppError> {
     let response = client
         .get(url)
         .header("User-Agent", USER_AGENT)
@@ -475,7 +464,10 @@ mod tests {
     fn latest_release_api_url_rejects_non_github_release_urls() {
         let err = latest_release_api_url("https://example.com/releases")
             .expect_err("url should be rejected");
-        assert!(err.to_string().contains("Unable to derive repository owner/name"));
+        assert!(
+            err.to_string()
+                .contains("Unable to derive repository owner/name")
+        );
     }
 
     #[test]
