@@ -1,7 +1,7 @@
 {
   "name": "cap-cli-workspace",
   "private": true,
-  "version": "0.2.5.1",
+  "version": "0.2.6",
   "scripts": {
     "dev": "cargo run -- --help",
     "build": "cargo build",
