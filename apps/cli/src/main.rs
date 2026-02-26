@@ -55,7 +55,7 @@ async fn run() -> Result<(), error::AppError> {
             let client = SupabaseClient::from_env()?;
             tui::run_list(&client).await?;
         }
-        Commands::SelfUpdate(args) => match run_self_update(args.version.as_deref()).await? {
+        Commands::Update(args) => match run_self_update(args.version.as_deref()).await? {
             SelfUpdateOutcome::UpToDate { version } => {
                 println!("Already up to date (version {version})");
             }
@@ -65,7 +65,7 @@ async fn run() -> Result<(), error::AppError> {
                 tag,
             } => {
                 println!(
-                    "Self-update successful\nfrom: {from_version}\nto: {to_version}\nrelease_tag: {tag}"
+                    "Update successful\nfrom: {from_version}\nto: {to_version}\nrelease_tag: {tag}"
                 );
             }
         },

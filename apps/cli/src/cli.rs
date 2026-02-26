@@ -16,7 +16,8 @@ pub enum Commands {
     Login,
     Compose,
     List,
-    SelfUpdate(SelfUpdateArgs),
+    #[command(name = "update", alias = "self-update")]
+    Update(UpdateArgs),
 }
 
 #[derive(Debug, Args)]
@@ -26,7 +27,7 @@ pub struct AddArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct SelfUpdateArgs {
+pub struct UpdateArgs {
     #[arg(
         long,
         help = "Target version (for example 0.2.1). Defaults to latest release."
@@ -53,7 +54,7 @@ where
     }
     if matches!(
         first,
-        "add" | "login" | "help" | "compose" | "list" | "self-update"
+        "add" | "login" | "help" | "compose" | "list" | "update" | "self-update"
     ) {
         return argv;
     }
@@ -173,7 +174,14 @@ mod tests {
     }
 
     #[test]
-    fn does_not_rewrite_self_update_subcommand() {
+    fn does_not_rewrite_update_subcommand() {
+        let input = vec!["cap".to_string(), "update".to_string()];
+        let output = rewrite_shortcut_args(input);
+        assert_eq!(output, vec!["cap", "update"]);
+    }
+
+    #[test]
+    fn does_not_rewrite_self_update_alias_subcommand() {
         let input = vec!["cap".to_string(), "self-update".to_string()];
         let output = rewrite_shortcut_args(input);
         assert_eq!(output, vec!["cap", "self-update"]);

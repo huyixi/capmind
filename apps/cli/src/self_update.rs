@@ -2,19 +2,17 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use reqwest::StatusCode;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 
-const RELEASES_API: &str = "https://api.github.com/repos/huyixi/capmind/releases";
+const RELEASES_URL: &str = "https://github.com/huyixi/capmind/releases";
 const USER_AGENT: &str = "cap-cli-self-update";
 const CHECKSUM_ASSET_NAME: &str = "SHA256SUMS";
 const TAG_PREFIX: &str = "cli-v";
 
 struct UpdateConfig<'a> {
-    releases_api: &'a str,
+    releases_url: &'a str,
     current_exe_path: Option<&'a Path>,
     current_version: &'a str,
 }
@@ -31,23 +29,16 @@ pub enum SelfUpdateOutcome {
     },
 }
 
-#[derive(Debug, Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
-    assets: Vec<GitHubAsset>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GitHubAsset {
-    name: String,
-    browser_download_url: String,
+struct DownloadedBinary {
+    bytes: Vec<u8>,
+    final_url: reqwest::Url,
 }
 
 pub async fn run_self_update(
     requested_version: Option<&str>,
 ) -> Result<SelfUpdateOutcome, AppError> {
     let config = UpdateConfig {
-        releases_api: RELEASES_API,
+        releases_url: RELEASES_URL,
         current_exe_path: None,
         current_version: env!("CARGO_PKG_VERSION"),
     };
@@ -59,7 +50,6 @@ async fn run_self_update_with_config(
     config: &UpdateConfig<'_>,
 ) -> Result<SelfUpdateOutcome, AppError> {
     let platform_asset = platform_asset_name()?;
-    let current_version = config.current_version.to_string();
     let requested_tag = requested_version.map(normalize_target_tag);
 
     let client = reqwest::Client::builder()
@@ -67,25 +57,35 @@ async fn run_self_update_with_config(
         .build()
         .map_err(|err| AppError::Network(format!("Failed to build HTTP client: {err}")))?;
 
-    let release = fetch_release(&client, config.releases_api, requested_tag.as_deref()).await?;
-    if release_version_from_tag(&release.tag_name) == current_version {
-        return Ok(SelfUpdateOutcome::UpToDate {
-            version: current_version,
-        });
-    }
-
-    let binary_url = find_asset_url(&release, platform_asset)?;
-    let checksums_url = find_asset_url(&release, CHECKSUM_ASSET_NAME)?;
+    let binary_url = release_asset_url(
+        config.releases_url,
+        requested_tag.as_deref(),
+        platform_asset,
+    );
+    let checksums_url = release_asset_url(
+        config.releases_url,
+        requested_tag.as_deref(),
+        CHECKSUM_ASSET_NAME,
+    );
 
     let checksums = download_asset_text(&client, &checksums_url).await?;
-    let binary_bytes = download_asset_bytes(&client, &binary_url).await?;
+    let binary = download_asset_bytes(&client, &binary_url).await?;
+    let release_tag = match requested_tag {
+        Some(tag) => tag,
+        None => extract_tag_from_release_download_url(&binary.final_url).ok_or_else(|| {
+            AppError::Api(format!(
+                "Failed to resolve latest release tag from download URL `{}`",
+                binary.final_url
+            ))
+        })?,
+    };
 
     apply_release_update(
         config.current_version,
-        release,
+        &release_tag,
         platform_asset,
         &checksums,
-        &binary_bytes,
+        &binary.bytes,
         config.current_exe_path,
     )
 }
@@ -96,7 +96,7 @@ fn platform_asset_name() -> Result<&'static str, AppError> {
         "macos" => Ok("cap-macOS"),
         "windows" => Ok("cap-Windows.exe"),
         other => Err(AppError::Api(format!(
-            "Self-update is not supported on this platform: {other}"
+            "Update is not supported on this platform: {other}"
         ))),
     }
 }
@@ -114,55 +114,21 @@ fn release_version_from_tag(tag: &str) -> &str {
     tag.strip_prefix(TAG_PREFIX).unwrap_or(tag)
 }
 
-async fn fetch_release(
-    client: &reqwest::Client,
-    releases_api: &str,
-    target_tag: Option<&str>,
-) -> Result<GitHubRelease, AppError> {
-    let endpoint = match target_tag {
-        Some(tag) => format!("{releases_api}/tags/{tag}"),
-        None => format!("{releases_api}/latest"),
-    };
-
-    let response = client
-        .get(endpoint)
-        .header("User-Agent", USER_AGENT)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|err| AppError::Network(format!("Failed to fetch release metadata: {err}")))?;
-
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|err| AppError::Network(format!("Failed to read release metadata: {err}")))?;
-
-    if !status.is_success() {
-        if status == StatusCode::NOT_FOUND {
-            return Err(AppError::Api("Requested release was not found".to_string()));
-        }
-        return Err(AppError::Api(format!(
-            "Failed to fetch release metadata ({status}): {body}"
-        )));
+fn release_asset_url(releases_url: &str, target_tag: Option<&str>, asset_name: &str) -> String {
+    match target_tag {
+        Some(tag) => format!("{releases_url}/download/{tag}/{asset_name}"),
+        None => format!("{releases_url}/latest/download/{asset_name}"),
     }
-
-    serde_json::from_str(&body)
-        .map_err(|err| AppError::Api(format!("Invalid release metadata JSON: {err}")))
 }
 
-fn find_asset_url(release: &GitHubRelease, asset_name: &str) -> Result<String, AppError> {
-    release
-        .assets
-        .iter()
-        .find(|asset| asset.name == asset_name)
-        .map(|asset| asset.browser_download_url.clone())
-        .ok_or_else(|| {
-            AppError::Api(format!(
-                "Release `{}` is missing asset `{asset_name}`",
-                release.tag_name
-            ))
-        })
+fn extract_tag_from_release_download_url(url: &reqwest::Url) -> Option<String> {
+    let segments: Vec<_> = url.path_segments()?.collect();
+    for window in segments.windows(3) {
+        if window[0] == "download" {
+            return Some(window[1].to_string());
+        }
+    }
+    None
 }
 
 async fn download_asset_text(client: &reqwest::Client, url: &str) -> Result<String, AppError> {
@@ -187,7 +153,10 @@ async fn download_asset_text(client: &reqwest::Client, url: &str) -> Result<Stri
         .map_err(|err| AppError::Network(format!("Failed to read asset `{url}`: {err}")))
 }
 
-async fn download_asset_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, AppError> {
+async fn download_asset_bytes(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<DownloadedBinary, AppError> {
     let response = client
         .get(url)
         .header("User-Agent", USER_AGENT)
@@ -203,11 +172,14 @@ async fn download_asset_bytes(client: &reqwest::Client, url: &str) -> Result<Vec
         )));
     }
 
-    response
+    let final_url = response.url().clone();
+    let bytes = response
         .bytes()
         .await
         .map(|v| v.to_vec())
-        .map_err(|err| AppError::Network(format!("Failed to read asset `{url}`: {err}")))
+        .map_err(|err| AppError::Network(format!("Failed to read asset `{url}`: {err}")))?;
+
+    Ok(DownloadedBinary { bytes, final_url })
 }
 
 fn parse_expected_sha256(checksums: &str, asset_name: &str) -> Option<String> {
@@ -252,21 +224,18 @@ fn compute_sha256_hex(bytes: &[u8]) -> String {
 
 fn apply_release_update(
     current_version: &str,
-    release: GitHubRelease,
+    release_tag: &str,
     platform_asset: &str,
     checksums: &str,
     binary_bytes: &[u8],
     current_exe_override: Option<&Path>,
 ) -> Result<SelfUpdateOutcome, AppError> {
-    let release_version = release_version_from_tag(&release.tag_name).to_string();
+    let release_version = release_version_from_tag(release_tag).to_string();
     if release_version == current_version {
         return Ok(SelfUpdateOutcome::UpToDate {
             version: current_version.to_string(),
         });
     }
-
-    let _ = find_asset_url(&release, platform_asset)?;
-    let _ = find_asset_url(&release, CHECKSUM_ASSET_NAME)?;
 
     let expected_hash = parse_expected_sha256(checksums, platform_asset).ok_or_else(|| {
         AppError::Api(format!(
@@ -285,7 +254,7 @@ fn apply_release_update(
     Ok(SelfUpdateOutcome::Updated {
         from_version: current_version.to_string(),
         to_version: release_version,
-        tag: release.tag_name,
+        tag: release_tag.to_string(),
     })
 }
 
@@ -330,7 +299,7 @@ fn install_binary_with_rollback(
     if let Err(err) = fs::rename(&current_exe, &backup_path) {
         let _ = remove_if_exists(&staged_path);
         return Err(AppError::Api(format!(
-            "Failed to move current binary to backup. Self-update aborted without replacing executable: {err}"
+            "Failed to move current binary to backup. Update aborted without replacing executable: {err}"
         )));
     }
 
@@ -380,9 +349,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        CHECKSUM_ASSET_NAME, GitHubAsset, GitHubRelease, SelfUpdateOutcome, apply_release_update,
-        compute_sha256_hex, normalize_target_tag, parse_expected_sha256, platform_asset_name,
-        release_version_from_tag,
+        SelfUpdateOutcome, apply_release_update, compute_sha256_hex,
+        extract_tag_from_release_download_url, normalize_target_tag, parse_expected_sha256,
+        platform_asset_name, release_asset_url, release_version_from_tag,
     };
 
     fn temp_file_path(name: &str) -> PathBuf {
@@ -397,22 +366,6 @@ mod tests {
                 .as_nanos()
         ));
         path
-    }
-
-    fn mock_release(tag: &str, asset_name: &str) -> GitHubRelease {
-        GitHubRelease {
-            tag_name: tag.to_string(),
-            assets: vec![
-                GitHubAsset {
-                    name: asset_name.to_string(),
-                    browser_download_url: "https://example.invalid/cap-cli".to_string(),
-                },
-                GitHubAsset {
-                    name: CHECKSUM_ASSET_NAME.to_string(),
-                    browser_download_url: "https://example.invalid/SHA256SUMS".to_string(),
-                },
-            ],
-        }
     }
 
     fn assert_temp_update_files_absent(exe_path: &Path) {
@@ -458,6 +411,31 @@ mod tests {
     }
 
     #[test]
+    fn release_asset_url_uses_latest_or_tag_paths() {
+        let base = "https://github.com/huyixi/capmind/releases";
+        assert_eq!(
+            release_asset_url(base, None, "cap-macOS"),
+            "https://github.com/huyixi/capmind/releases/latest/download/cap-macOS"
+        );
+        assert_eq!(
+            release_asset_url(base, Some("cli-v1.2.3"), "cap-macOS"),
+            "https://github.com/huyixi/capmind/releases/download/cli-v1.2.3/cap-macOS"
+        );
+    }
+
+    #[test]
+    fn extract_tag_from_release_download_url_parses_tag() {
+        let url = reqwest::Url::parse(
+            "https://github.com/huyixi/capmind/releases/download/cli-v9.9.9/cap-macOS",
+        )
+        .expect("valid url");
+        assert_eq!(
+            extract_tag_from_release_download_url(&url).as_deref(),
+            Some("cli-v9.9.9")
+        );
+    }
+
+    #[test]
     fn self_update_apply_release_replaces_binary_when_checksum_matches() {
         let asset_name = platform_asset_name()
             .expect("supported platform")
@@ -468,10 +446,9 @@ mod tests {
 
         let exe_path = temp_file_path("cap-self-update-success");
         std::fs::write(&exe_path, b"old-binary-content").expect("write old binary");
-        let release = mock_release("cli-v9.9.9", &asset_name);
         let outcome = apply_release_update(
             "0.1.0",
-            release,
+            "cli-v9.9.9",
             &asset_name,
             &checksums_body,
             &binary_body,
@@ -512,10 +489,9 @@ mod tests {
         let exe_path = temp_file_path("cap-self-update-mismatch");
         let old = b"old-binary-content";
         std::fs::write(&exe_path, old).expect("write old binary");
-        let release = mock_release("cli-v9.9.9", &asset_name);
         let err = apply_release_update(
             "0.1.0",
-            release,
+            "cli-v9.9.9",
             &asset_name,
             &checksums_body,
             &binary_body,
