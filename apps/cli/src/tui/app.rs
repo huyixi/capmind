@@ -21,7 +21,6 @@ use crate::supabase::{
 
 use super::chat_widget::{ChatWidget, WidgetAction};
 use super::render;
-use super::types::MAX_HISTORY_ITEMS;
 
 const WQ_MAX_ATTEMPTS: usize = 3;
 
@@ -146,10 +145,7 @@ impl<'a> ComposeApp<'a> {
             let Ok(session) = authenticate_with_stored_token(&client).await else {
                 return;
             };
-            let Ok(memos) = client
-                .list_recent_memos(&session.access_token, MAX_HISTORY_ITEMS)
-                .await
-            else {
+            let Ok(memos) = client.list_recent_memos(&session.access_token).await else {
                 return;
             };
             let _ = tx.send(BackgroundEvent::HistoryLoaded(memos));
@@ -318,11 +314,7 @@ impl<'a> ComposeApp<'a> {
             }
         };
 
-        match self
-            .client
-            .list_recent_memos(&session.access_token, MAX_HISTORY_ITEMS)
-            .await
-        {
+        match self.client.list_recent_memos(&session.access_token).await {
             Ok(memos) => self.widget.refresh_history_from_memos(memos),
             Err(err) => self
                 .widget

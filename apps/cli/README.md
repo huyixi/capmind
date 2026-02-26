@@ -74,13 +74,13 @@ TUI keys:
 - `d` (in History): open delete confirmation for selected memo
 - `Enter` / `y` / `d` (in delete confirmation): confirm delete
 - `n` / `Esc` (in delete confirmation): cancel delete
-- Memo list page: `j`/`k` or `↑`/`↓` move, `Enter` loads selected memo into composer, `d` opens delete confirmation, `q` or `Esc` returns to composer page, `?` opens help popup
+- Memo list page: `j`/`k` or `↑`/`↓` move, `Enter` loads selected memo into composer, `r` refreshes memo list, `d` opens delete confirmation, `q` or `Esc` returns to composer page, `?` opens help popup
 
 Composer page starts in single-pane mode (no history pane shown).
 Use `p` in `NORMAL` mode when you want to show the split composer/history layout.
 
-TUI history keeps up to the latest 100 entries.
-Latest memos are loaded into history in the background after startup (non-blocking).
+All non-deleted memos are loaded into history in the background after startup (non-blocking).
+Image-only memos are shown as `[Image-only memo]` in list/history views.
 Submitting from History edit mode updates the original memo by version.
 On version conflict, CLI follows Web behavior: conflict is resolved by backend RPC, keeping server-latest memo and forking your edits into a new memo.
 Deleting from History is a soft delete (`deleted_at` + version bump), aligned with Web behavior.
