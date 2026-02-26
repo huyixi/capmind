@@ -10,6 +10,36 @@ This document describes how to release `apps/cli` in this monorepo.
 
 Only tags that match `cli-v*` trigger GitHub Release publishing.
 
+## Signing setup (required once per machine)
+
+GitHub Release "Verified" depends on commit/tag signatures that GitHub can verify.
+
+1. Generate a signing key:
+
+```bash
+gpg --full-generate-key
+```
+
+2. Get your key ID:
+
+```bash
+gpg --list-secret-keys --keyid-format=long
+```
+
+3. Configure Git to sign commits and tags by default (`<KEY_ID>` example: `B5690EEEBB952194`):
+
+```bash
+git config --global user.signingkey <KEY_ID>
+git config --global commit.gpgsign true
+git config --global tag.gpgsign true
+```
+
+4. Export your public key and add it in GitHub Settings -> SSH and GPG keys:
+
+```bash
+gpg --armor --export <KEY_ID>
+```
+
 ## Pre-release checks
 
 Run checks from repo root:
@@ -30,13 +60,20 @@ pnpm run build:cli
 
 1. Ensure you are on the target branch and up to date.
 2. Update CLI version in `apps/cli/Cargo.toml` if needed.
-3. Commit version changes.
-4. Create and push a tag:
+3. Commit version changes with a signature.
+4. Create a signed annotated tag and verify it.
+5. Push commit and tag:
 
 ```bash
-git tag cli-v0.2.1
+git add apps/cli/Cargo.toml
+git commit -S -m "chore(cli): release v0.2.1"
+git tag -s cli-v0.2.1 -m "cli-v0.2.1"
+git tag -v cli-v0.2.1
+git push origin HEAD
 git push origin cli-v0.2.1
 ```
+
+Do not use lightweight tags (for example `git tag cli-v0.2.1`) for releases.
 
 ## What the workflow does
 
@@ -59,7 +96,7 @@ It does **not** publish a GitHub Release because publish job is tag-gated.
 
 1. Fix the issue in a new commit.
 2. Bump patch version (for example `0.2.1` -> `0.2.2`).
-3. Tag and push `cli-v0.2.2`.
+3. Create and push a signed tag `cli-v0.2.2`.
 4. Mark the broken release as deprecated in GitHub Release notes.
 
 Do not reuse or move an existing release tag.
