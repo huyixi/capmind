@@ -39,10 +39,6 @@ interface UseMemoSyncOptions {
   resolvePages: (pages: Memo[][] | undefined) => Memo[][];
   replaceMemo: ReplaceMemo;
   removeMemo: RemoveMemo;
-  forkMemoFromConflict: (payload: {
-    sourceMemoId: string;
-    text: string;
-  }) => Promise<Memo | null>;
   fetchServerMemo: (memoId: string) => Promise<Memo | null>;
   uploadImages: (files: File[], userId: string) => Promise<string[]>;
   supabase: SupabaseClient;
@@ -56,7 +52,6 @@ export function useMemoSync({
   resolvePages,
   replaceMemo,
   removeMemo,
-  forkMemoFromConflict,
   fetchServerMemo,
   uploadImages,
   supabase,
@@ -178,14 +173,11 @@ export function useMemoSync({
             if (response.status === 409) {
               const payload = await response.json();
               let serverMemo = payload?.memo as Memo | undefined;
+              const forkedMemo = payload?.forkedMemo as Memo | undefined;
               if (!serverMemo) {
                 const fetched = await fetchServerMemo(item.memoId);
                 serverMemo = fetched ?? undefined;
               }
-              const forkedMemo = await forkMemoFromConflict({
-                sourceMemoId: item.memoId,
-                text: item.text,
-              });
               mutate(
                 (current) => {
                   if (!current) return current;
@@ -202,15 +194,31 @@ export function useMemoSync({
                       nextPages = removeMemo(nextPages, item.memoId);
                     }
                   }
-                  if (forkedMemo && shouldShowMemo(forkedMemo)) {
-                    if (!nextPages || nextPages.length === 0) {
-                      nextPages = [[forkedMemo]];
-                    } else {
-                      nextPages = [
-                        [forkedMemo, ...nextPages[0]],
-                        ...nextPages.slice(1),
-                      ];
+                  if (forkedMemo) {
+                    const normalizedForkedVersion = normalizeMemoVersion(
+                      forkedMemo.version,
+                    );
+                    const nextForkedMemo = {
+                      ...forkedMemo,
+                      version: normalizedForkedVersion,
+                      serverVersion: normalizedForkedVersion,
+                      hasConflict: false,
+                      conflictServerMemo: undefined,
+                      conflictType: undefined,
+                    };
+                    if (shouldShowMemo(nextForkedMemo)) {
+                      if (!nextPages || nextPages.length === 0) {
+                        nextPages = [[nextForkedMemo]];
+                      } else {
+                        nextPages = [
+                          [nextForkedMemo, ...nextPages[0]],
+                          ...nextPages.slice(1),
+                        ];
+                      }
                     }
+                  }
+                  if (!serverMemo && !forkedMemo) {
+                    throw new Error("Conflict response missing memo payload");
                   }
                   return nextPages;
                 },
@@ -377,7 +385,6 @@ export function useMemoSync({
     }
   }, [
     fetchServerMemo,
-    forkMemoFromConflict,
     initialUser,
     mutate,
     removeMemo,

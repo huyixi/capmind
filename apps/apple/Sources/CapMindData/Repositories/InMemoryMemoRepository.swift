@@ -70,7 +70,7 @@ public actor InMemoryMemoRepository: MemoRepository {
         }
 
         if existing.version != MemoVersion.normalizeExpected(expectedVersion) {
-            throw CapMindError.conflict(serverMemo: existing)
+            throw CapMindError.conflict(serverMemo: existing, forkedMemo: nil)
         }
 
         existing.text = text

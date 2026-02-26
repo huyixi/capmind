@@ -124,7 +124,6 @@ export function MemoListContainer({
   const {
     cleanupOptimisticImages,
     fetchServerMemo,
-    forkMemoFromConflict,
     handleDelete,
     handleRestore,
     handleSubmit,
@@ -157,7 +156,6 @@ export function MemoListContainer({
     resolvePages,
     replaceMemo,
     removeMemo,
-    forkMemoFromConflict,
     fetchServerMemo,
     uploadImages,
     supabase,

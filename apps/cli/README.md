@@ -82,9 +82,9 @@ Use `p` in `NORMAL` mode when you want to show the split composer/history layout
 TUI history keeps up to the latest 100 entries.
 Latest memos are loaded into history in the background after startup (non-blocking).
 Submitting from History edit mode updates the original memo by version.
-On version conflict, CLI follows Web behavior: keep server-latest memo and fork your edits into a new memo.
+On version conflict, CLI follows Web behavior: conflict is resolved by backend RPC, keeping server-latest memo and forking your edits into a new memo.
 Deleting from History is a soft delete (`deleted_at` + version bump), aligned with Web behavior.
-On delete conflict, CLI refreshes that memo from server state instead of hard-removing it.
+On delete conflict, CLI resolves via backend RPC and refreshes that memo from server state instead of hard-removing it.
 If `W` fails after the final retry, the UI prompts to either quit without submit or continue editing.
 
 ### 2) Login (interactive, one-time)

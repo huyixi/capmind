@@ -241,6 +241,131 @@ values
     )
   ),
   (
+    'function_increment_numeric_string_exists',
+    exists (
+      select 1
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and p.proname = 'increment_numeric_string'
+        and p.proargtypes = '25'::oidvector
+    )
+  ),
+  (
+    'function_memo_update_resolve_conflict_exists',
+    exists (
+      select 1
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and p.proname = 'memo_update_resolve_conflict'
+        and p.proargtypes = '2950 25 25 1009'::oidvector
+    )
+  ),
+  (
+    'function_memo_delete_resolve_conflict_exists',
+    exists (
+      select 1
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and p.proname = 'memo_delete_resolve_conflict'
+        and p.proargtypes = '2950 25 1184'::oidvector
+    )
+  ),
+  (
+    'function_memo_restore_resolve_conflict_exists',
+    exists (
+      select 1
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and p.proname = 'memo_restore_resolve_conflict'
+        and p.proargtypes = '2950 25 1184'::oidvector
+    )
+  ),
+  (
+    'function_memo_update_resolve_conflict_security_invoker',
+    coalesce((
+      select not p.prosecdef
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and p.proname = 'memo_update_resolve_conflict'
+        and p.proargtypes = '2950 25 25 1009'::oidvector
+    ), false)
+  ),
+  (
+    'function_memo_delete_resolve_conflict_security_invoker',
+    coalesce((
+      select not p.prosecdef
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and p.proname = 'memo_delete_resolve_conflict'
+        and p.proargtypes = '2950 25 1184'::oidvector
+    ), false)
+  ),
+  (
+    'function_memo_restore_resolve_conflict_security_invoker',
+    coalesce((
+      select not p.prosecdef
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and p.proname = 'memo_restore_resolve_conflict'
+        and p.proargtypes = '2950 25 1184'::oidvector
+    ), false)
+  ),
+  (
+    'anon_no_execute_memo_update_resolve_conflict',
+    not has_function_privilege(
+      'anon',
+      'public.memo_update_resolve_conflict(uuid, text, text, text[])',
+      'execute'
+    )
+  ),
+  (
+    'anon_no_execute_memo_delete_resolve_conflict',
+    not has_function_privilege(
+      'anon',
+      'public.memo_delete_resolve_conflict(uuid, text, timestamp with time zone)',
+      'execute'
+    )
+  ),
+  (
+    'anon_no_execute_memo_restore_resolve_conflict',
+    not has_function_privilege(
+      'anon',
+      'public.memo_restore_resolve_conflict(uuid, text, timestamp with time zone)',
+      'execute'
+    )
+  ),
+  (
+    'auth_has_execute_memo_update_resolve_conflict',
+    has_function_privilege(
+      'authenticated',
+      'public.memo_update_resolve_conflict(uuid, text, text, text[])',
+      'execute'
+    )
+  ),
+  (
+    'auth_has_execute_memo_delete_resolve_conflict',
+    has_function_privilege(
+      'authenticated',
+      'public.memo_delete_resolve_conflict(uuid, text, timestamp with time zone)',
+      'execute'
+    )
+  ),
+  (
+    'auth_has_execute_memo_restore_resolve_conflict',
+    has_function_privilege(
+      'authenticated',
+      'public.memo_restore_resolve_conflict(uuid, text, timestamp with time zone)',
+      'execute'
+    )
+  ),
+  (
     'index_memos_user_id_created_at_idx_exists',
     exists (
       select 1

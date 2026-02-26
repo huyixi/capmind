@@ -33,13 +33,23 @@ pub struct RecentMemo {
 #[derive(Debug, Clone)]
 pub enum UpdateMemoOutcome {
     Updated(RecentMemo),
-    Conflict,
+    Conflict {
+        server_memo: RecentMemo,
+        forked: InsertedMemo,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum DeleteMemoOutcome {
     Deleted,
-    Conflict,
+    Conflict { server_memo: RecentMemo },
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum RestoreMemoOutcome {
+    Restored(RecentMemo),
+    Conflict { server_memo: RecentMemo },
 }
 
 #[derive(Debug, Clone)]
@@ -79,17 +89,25 @@ struct ListMemoResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct UpdateMemoRequest<'a> {
-    text: &'a str,
-    updated_at: &'a str,
-    version: &'a str,
+struct UpdateMemoRpcRequest<'a> {
+    arg_memo_id: &'a str,
+    arg_text: &'a str,
+    arg_expected_version: &'a str,
 }
 
 #[derive(Debug, Serialize)]
-struct DeleteMemoRequest<'a> {
-    deleted_at: &'a str,
-    updated_at: &'a str,
-    version: &'a str,
+struct DeleteMemoRpcRequest<'a> {
+    arg_memo_id: &'a str,
+    arg_expected_version: &'a str,
+    arg_deleted_at: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+#[allow(dead_code)]
+struct RestoreMemoRpcRequest<'a> {
+    arg_memo_id: &'a str,
+    arg_expected_version: &'a str,
+    arg_restored_at: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,6 +117,15 @@ struct MemoRowResponse {
     created_at: String,
     version: serde_json::Value,
     deleted_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoResolveConflictRpcResponse {
+    status: String,
+    memo_id: Option<String>,
+    memo: Option<serde_json::Value>,
+    server_memo: Option<serde_json::Value>,
+    forked_memo: Option<serde_json::Value>,
 }
 
 impl SupabaseClient {
@@ -283,6 +310,7 @@ impl SupabaseClient {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub async fn get_memo_by_id(
         &self,
         access_token: &str,
@@ -329,51 +357,89 @@ impl SupabaseClient {
         text: &str,
         expected_version: &str,
     ) -> Result<UpdateMemoOutcome, AppError> {
-        let next_version = increment_numeric_string(expected_version).ok_or_else(|| {
-            AppError::Api(format!(
-                "Memo update failed: invalid expected version `{expected_version}`"
-            ))
-        })?;
-        let updated_at = Utc::now().to_rfc3339();
-        let endpoint = format!(
-            "{}/rest/v1/memos?id=eq.{memo_id}&version=eq.{expected_version}",
-            self.base_url
-        );
-        let payload = UpdateMemoRequest {
-            text,
-            updated_at: &updated_at,
-            version: &next_version,
+        let endpoint = format!("{}/rest/v1/rpc/memo_update_resolve_conflict", self.base_url);
+        let payload = UpdateMemoRpcRequest {
+            arg_memo_id: memo_id,
+            arg_text: text,
+            arg_expected_version: expected_version,
         };
         let response = self
             .http
-            .patch(endpoint)
+            .post(endpoint)
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {access_token}"))
-            .header("Prefer", "return=representation")
             .json(&payload)
             .send()
             .await
-            .map_err(|err| AppError::Network(format!("Supabase update request failed: {err}")))?;
+            .map_err(|err| {
+                AppError::Network(format!("Supabase update RPC request failed: {err}"))
+            })?;
 
         let status = response.status();
         if !status.is_success() {
             let body = read_error_body(response).await;
-            let message = format!("Update memo failed ({status}): {body}");
+            let message = format!("Update memo RPC failed ({status}): {body}");
             if status == StatusCode::UNAUTHORIZED {
                 return Err(AppError::Auth(message));
             }
             return Err(AppError::Api(message));
         }
 
-        let rows: Vec<MemoRowResponse> = response
+        let rows: Vec<MemoResolveConflictRpcResponse> = response
             .json()
             .await
-            .map_err(|err| AppError::Api(format!("Invalid update response JSON: {err}")))?;
-        let Some(row) = rows.into_iter().next() else {
-            return Ok(UpdateMemoOutcome::Conflict);
-        };
+            .map_err(|err| AppError::Api(format!("Invalid update RPC response JSON: {err}")))?;
+        let row = rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::Api("Update memo RPC response is empty".to_string()))?;
+        let status = row.status.as_str();
+        let _memo_id = row.memo_id.as_deref().unwrap_or(memo_id);
 
-        Ok(UpdateMemoOutcome::Updated(row_to_recent_memo(row)?))
+        match status {
+            "updated" => {
+                let memo_json = row.memo.ok_or_else(|| {
+                    AppError::Api("Update memo RPC missing `memo` payload".to_string())
+                })?;
+                let memo_row: MemoRowResponse =
+                    serde_json::from_value(memo_json).map_err(|err| {
+                        AppError::Api(format!("Invalid update memo payload from RPC: {err}"))
+                    })?;
+                Ok(UpdateMemoOutcome::Updated(row_to_recent_memo(memo_row)?))
+            }
+            "conflict" => {
+                let server_json = row.server_memo.ok_or_else(|| {
+                    AppError::Api("Update memo conflict missing `server_memo` payload".to_string())
+                })?;
+                let forked_json = row.forked_memo.ok_or_else(|| {
+                    AppError::Api("Update memo conflict missing `forked_memo` payload".to_string())
+                })?;
+                let server_row: MemoRowResponse =
+                    serde_json::from_value(server_json).map_err(|err| {
+                        AppError::Api(format!(
+                            "Invalid update conflict `server_memo` payload: {err}"
+                        ))
+                    })?;
+                let forked_row: InsertMemoResponse =
+                    serde_json::from_value(forked_json).map_err(|err| {
+                        AppError::Api(format!(
+                            "Invalid update conflict `forked_memo` payload: {err}"
+                        ))
+                    })?;
+                Ok(UpdateMemoOutcome::Conflict {
+                    server_memo: row_to_recent_memo(server_row)?,
+                    forked: InsertedMemo {
+                        id: forked_row.id,
+                        created_at: forked_row.created_at,
+                        version: normalize_version_value(&forked_row.version)?,
+                    },
+                })
+            }
+            "not_found" => Err(AppError::Api("Memo not found".to_string())),
+            other => Err(AppError::Api(format!(
+                "Unexpected update memo RPC status `{other}`"
+            ))),
+        }
     }
 
     pub async fn delete_memo(
@@ -382,51 +448,145 @@ impl SupabaseClient {
         memo_id: &str,
         expected_version: &str,
     ) -> Result<DeleteMemoOutcome, AppError> {
-        let next_version = increment_numeric_string(expected_version).ok_or_else(|| {
-            AppError::Api(format!(
-                "Memo delete failed: invalid expected version `{expected_version}`"
-            ))
-        })?;
         let deleted_at = Utc::now().to_rfc3339();
-        let payload = DeleteMemoRequest {
-            deleted_at: &deleted_at,
-            updated_at: &deleted_at,
-            version: &next_version,
+        let payload = DeleteMemoRpcRequest {
+            arg_memo_id: memo_id,
+            arg_expected_version: expected_version,
+            arg_deleted_at: &deleted_at,
         };
-        let endpoint = format!(
-            "{}/rest/v1/memos?id=eq.{memo_id}&version=eq.{expected_version}",
-            self.base_url
-        );
+        let endpoint = format!("{}/rest/v1/rpc/memo_delete_resolve_conflict", self.base_url);
         let response = self
             .http
-            .patch(endpoint)
+            .post(endpoint)
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {access_token}"))
-            .header("Prefer", "return=representation")
             .json(&payload)
             .send()
             .await
-            .map_err(|err| AppError::Network(format!("Supabase delete request failed: {err}")))?;
+            .map_err(|err| {
+                AppError::Network(format!("Supabase delete RPC request failed: {err}"))
+            })?;
 
         let status = response.status();
         if !status.is_success() {
             let body = read_error_body(response).await;
-            let message = format!("Delete memo failed ({status}): {body}");
+            let message = format!("Delete memo RPC failed ({status}): {body}");
             if status == StatusCode::UNAUTHORIZED {
                 return Err(AppError::Auth(message));
             }
             return Err(AppError::Api(message));
         }
 
-        let rows: Vec<MemoRowResponse> = response
+        let rows: Vec<MemoResolveConflictRpcResponse> = response
             .json()
             .await
-            .map_err(|err| AppError::Api(format!("Invalid delete response JSON: {err}")))?;
-        if rows.is_empty() {
-            return Ok(DeleteMemoOutcome::Conflict);
+            .map_err(|err| AppError::Api(format!("Invalid delete RPC response JSON: {err}")))?;
+        let row = rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::Api("Delete memo RPC response is empty".to_string()))?;
+
+        match row.status.as_str() {
+            "deleted" => Ok(DeleteMemoOutcome::Deleted),
+            "conflict" => {
+                let server_json = row.server_memo.ok_or_else(|| {
+                    AppError::Api("Delete memo conflict missing `server_memo` payload".to_string())
+                })?;
+                let server_row: MemoRowResponse =
+                    serde_json::from_value(server_json).map_err(|err| {
+                        AppError::Api(format!(
+                            "Invalid delete conflict `server_memo` payload: {err}"
+                        ))
+                    })?;
+                Ok(DeleteMemoOutcome::Conflict {
+                    server_memo: row_to_recent_memo(server_row)?,
+                })
+            }
+            "not_found" => Err(AppError::Api("Memo not found".to_string())),
+            other => Err(AppError::Api(format!(
+                "Unexpected delete memo RPC status `{other}`"
+            ))),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn restore_memo(
+        &self,
+        access_token: &str,
+        memo_id: &str,
+        expected_version: &str,
+    ) -> Result<RestoreMemoOutcome, AppError> {
+        let restored_at = Utc::now().to_rfc3339();
+        let payload = RestoreMemoRpcRequest {
+            arg_memo_id: memo_id,
+            arg_expected_version: expected_version,
+            arg_restored_at: &restored_at,
+        };
+        let endpoint = format!(
+            "{}/rest/v1/rpc/memo_restore_resolve_conflict",
+            self.base_url
+        );
+        let response = self
+            .http
+            .post(endpoint)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| {
+                AppError::Network(format!("Supabase restore RPC request failed: {err}"))
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = read_error_body(response).await;
+            let message = format!("Restore memo RPC failed ({status}): {body}");
+            if status == StatusCode::UNAUTHORIZED {
+                return Err(AppError::Auth(message));
+            }
+            return Err(AppError::Api(message));
         }
 
-        Ok(DeleteMemoOutcome::Deleted)
+        let rows: Vec<MemoResolveConflictRpcResponse> = response
+            .json()
+            .await
+            .map_err(|err| AppError::Api(format!("Invalid restore RPC response JSON: {err}")))?;
+        let row = rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::Api("Restore memo RPC response is empty".to_string()))?;
+
+        match row.status.as_str() {
+            "restored" => {
+                let memo_json = row.memo.ok_or_else(|| {
+                    AppError::Api("Restore memo RPC missing `memo` payload".to_string())
+                })?;
+                let memo_row: MemoRowResponse =
+                    serde_json::from_value(memo_json).map_err(|err| {
+                        AppError::Api(format!("Invalid restore memo payload from RPC: {err}"))
+                    })?;
+                Ok(RestoreMemoOutcome::Restored(row_to_recent_memo(memo_row)?))
+            }
+            "conflict" => {
+                let server_json = row.server_memo.ok_or_else(|| {
+                    AppError::Api("Restore memo conflict missing `server_memo` payload".to_string())
+                })?;
+                let server_row: MemoRowResponse =
+                    serde_json::from_value(server_json).map_err(|err| {
+                        AppError::Api(format!(
+                            "Invalid restore conflict `server_memo` payload: {err}"
+                        ))
+                    })?;
+                Ok(RestoreMemoOutcome::Conflict {
+                    server_memo: row_to_recent_memo(server_row)?,
+                })
+            }
+            "not_found" => Err(AppError::Api("Memo not found".to_string())),
+            other => Err(AppError::Api(format!(
+                "Unexpected restore memo RPC status `{other}`"
+            ))),
+        }
     }
 }
 
@@ -499,52 +659,14 @@ fn normalize_version_value(value: &serde_json::Value) -> Result<String, AppError
     }
 }
 
-fn increment_numeric_string(value: &str) -> Option<String> {
-    if value.is_empty() || !value.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-
-    let mut digits: Vec<u8> = value.bytes().collect();
-    let mut carry = 1_u8;
-
-    for idx in (0..digits.len()).rev() {
-        let raw = digits[idx];
-        if !raw.is_ascii_digit() {
-            return None;
-        }
-        let n = (raw - b'0') + carry;
-        if n >= 10 {
-            digits[idx] = b'0';
-            carry = 1;
-        } else {
-            digits[idx] = b'0' + n;
-            carry = 0;
-            break;
-        }
-    }
-
-    if carry == 1 {
-        digits.insert(0, b'1');
-    }
-
-    String::from_utf8(digits).ok()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{extract_user_id_from_jwt, increment_numeric_string};
+    use super::extract_user_id_from_jwt;
 
     #[test]
     fn extract_sub_from_jwt_payload() {
         let token = "a.eyJzdWIiOiIxMjM0In0.b";
         let user_id = extract_user_id_from_jwt(token).expect("should parse sub");
         assert_eq!(user_id, "1234");
-    }
-
-    #[test]
-    fn increment_numeric_string_handles_carry() {
-        assert_eq!(increment_numeric_string("1"), Some("2".to_string()));
-        assert_eq!(increment_numeric_string("9"), Some("10".to_string()));
-        assert_eq!(increment_numeric_string("099"), Some("100".to_string()));
     }
 }

@@ -9,6 +9,7 @@ public final class ComposerViewModel: ObservableObject {
     private let imageRepository: any ImageRepository
     private let outboxRepository: any OutboxRepository
     private let onlineProvider: OnlineStateProviding
+    private var pendingConflictForkedMemo: MemoEntity?
 
     public init(
         memoRepository: any MemoRepository,
@@ -25,6 +26,7 @@ public final class ComposerViewModel: ObservableObject {
     }
 
     public func openCreate(draftText: String = "") {
+        pendingConflictForkedMemo = nil
         state = ComposerViewState(
             isPresented: true,
             mode: .create,
@@ -37,6 +39,7 @@ public final class ComposerViewModel: ObservableObject {
     }
 
     public func openEdit(memo: MemoEntity) {
+        pendingConflictForkedMemo = nil
         state = ComposerViewState(
             isPresented: true,
             mode: .edit,
@@ -49,6 +52,7 @@ public final class ComposerViewModel: ObservableObject {
     }
 
     public func close() {
+        pendingConflictForkedMemo = nil
         state.isPresented = false
         state.isSubmitting = false
         state.errorMessage = nil
@@ -63,6 +67,7 @@ public final class ComposerViewModel: ObservableObject {
     }
 
     public func submit(userID: String) async -> MemoEntity? {
+        pendingConflictForkedMemo = nil
         state.errorMessage = nil
         let text = state.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -80,6 +85,12 @@ public final class ComposerViewModel: ObservableObject {
         case .edit:
             return await submitEdit(userID: userID, text: text)
         }
+    }
+
+    public func consumePendingForkedMemo() -> MemoEntity? {
+        let value = pendingConflictForkedMemo
+        pendingConflictForkedMemo = nil
+        return value
     }
 
     private func submitCreate(userID: String, text: String) async -> MemoEntity? {
@@ -193,7 +204,8 @@ public final class ComposerViewModel: ObservableObject {
                 imagePaths: mergedPaths
             )
         } catch let error as CapMindError {
-            if case .conflict(let serverMemo) = error {
+            if case .conflict(let serverMemo, let forkedMemo) = error {
+                pendingConflictForkedMemo = forkedMemo
                 state.errorMessage = "Version conflict. Please retry."
                 return serverMemo
             }

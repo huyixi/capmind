@@ -64,6 +64,9 @@ public struct ComposerSheetView: View {
                         Task {
                             if let memo = await viewModel.submit(userID: userID) {
                                 onSubmitted(memo)
+                                if let forkedMemo = viewModel.consumePendingForkedMemo() {
+                                    onSubmitted(forkedMemo)
+                                }
                                 viewModel.close()
                             }
                         }

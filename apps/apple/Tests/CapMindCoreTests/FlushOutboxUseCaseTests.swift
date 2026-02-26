@@ -169,7 +169,7 @@ private actor MockMemoRepository: MemoRepository {
 
     func updateMemo(id: String, userID: String, text: String, expectedVersion: String, imagePaths: [String]?) async throws -> MemoEntity {
         if conflictOnUpdate {
-            throw CapMindError.conflict(serverMemo: nil)
+            throw CapMindError.conflict(serverMemo: nil, forkedMemo: nil)
         }
 
         return MemoEntity(

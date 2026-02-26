@@ -301,15 +301,8 @@ impl<'a> ComposeApp<'a> {
             .await
         {
             Ok(DeleteMemoOutcome::Deleted) => self.widget.on_delete_success(&memo_id),
-            Ok(DeleteMemoOutcome::Conflict) => {
-                match self
-                    .client
-                    .get_memo_by_id(&session.access_token, &memo_id)
-                    .await
-                {
-                    Ok(server_memo) => self.widget.on_delete_conflict(&server_memo),
-                    Err(err) => self.widget.on_delete_error(&err.to_string()),
-                }
+            Ok(DeleteMemoOutcome::Conflict { server_memo }) => {
+                self.widget.on_delete_conflict(&server_memo);
             }
             Err(err) => self.widget.on_delete_error(&err.to_string()),
         }
@@ -467,19 +460,14 @@ async fn submit_edit_once(
         .await?
     {
         UpdateMemoOutcome::Updated(updated_memo) => Ok(EditSubmitSuccess::Updated(updated_memo)),
-        UpdateMemoOutcome::Conflict => {
-            let server_memo = client
-                .get_memo_by_id(&session.access_token, memo_id)
-                .await?;
-            let forked = client
-                .insert_memo(&session.access_token, normalized)
-                .await?;
-            Ok(EditSubmitSuccess::Conflict {
-                server_memo,
-                submitted_text: normalized.to_string(),
-                forked,
-            })
-        }
+        UpdateMemoOutcome::Conflict {
+            server_memo,
+            forked,
+        } => Ok(EditSubmitSuccess::Conflict {
+            server_memo,
+            submitted_text: normalized.to_string(),
+            forked,
+        }),
     }
 }
 
