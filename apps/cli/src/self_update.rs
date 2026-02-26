@@ -2,6 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
@@ -29,9 +30,9 @@ pub enum SelfUpdateOutcome {
     },
 }
 
-struct DownloadedBinary {
-    bytes: Vec<u8>,
-    final_url: reqwest::Url,
+#[derive(Debug, Deserialize)]
+struct GitHubLatestReleaseResponse {
+    tag_name: String,
 }
 
 pub async fn run_self_update(
@@ -56,36 +57,31 @@ async fn run_self_update_with_config(
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|err| AppError::Network(format!("Failed to build HTTP client: {err}")))?;
+    let release_tag = match requested_tag {
+        Some(tag) => tag,
+        None => resolve_latest_release_tag(&client, config.releases_url).await?,
+    };
 
     let binary_url = release_asset_url(
         config.releases_url,
-        requested_tag.as_deref(),
+        Some(&release_tag),
         platform_asset,
     );
     let checksums_url = release_asset_url(
         config.releases_url,
-        requested_tag.as_deref(),
+        Some(&release_tag),
         CHECKSUM_ASSET_NAME,
     );
 
     let checksums = download_asset_text(&client, &checksums_url).await?;
-    let binary = download_asset_bytes(&client, &binary_url).await?;
-    let release_tag = match requested_tag {
-        Some(tag) => tag,
-        None => extract_tag_from_release_download_url(&binary.final_url).ok_or_else(|| {
-            AppError::Api(format!(
-                "Failed to resolve latest release tag from download URL `{}`",
-                binary.final_url
-            ))
-        })?,
-    };
+    let binary_bytes = download_asset_bytes(&client, &binary_url).await?;
 
     apply_release_update(
         config.current_version,
         &release_tag,
         platform_asset,
         &checksums,
-        &binary.bytes,
+        &binary_bytes,
         config.current_exe_path,
     )
 }
@@ -121,14 +117,57 @@ fn release_asset_url(releases_url: &str, target_tag: Option<&str>, asset_name: &
     }
 }
 
-fn extract_tag_from_release_download_url(url: &reqwest::Url) -> Option<String> {
-    let segments: Vec<_> = url.path_segments()?.collect();
-    for window in segments.windows(3) {
-        if window[0] == "download" {
-            return Some(window[1].to_string());
-        }
+fn latest_release_api_url(releases_url: &str) -> Result<String, AppError> {
+    let parsed = reqwest::Url::parse(releases_url).map_err(|err| {
+        AppError::Api(format!("Invalid releases URL `{releases_url}`: {err}"))
+    })?;
+    let segments: Vec<_> = parsed
+        .path_segments()
+        .map(|v| v.collect())
+        .unwrap_or_default();
+    if parsed.domain() != Some("github.com") || segments.len() < 3 || segments[2] != "releases" {
+        return Err(AppError::Api(format!(
+            "Unable to derive repository owner/name from releases URL `{releases_url}`"
+        )));
     }
-    None
+
+    Ok(format!(
+        "https://api.github.com/repos/{}/{}/releases/latest",
+        segments[0], segments[1]
+    ))
+}
+
+async fn resolve_latest_release_tag(
+    client: &reqwest::Client,
+    releases_url: &str,
+) -> Result<String, AppError> {
+    let api_url = latest_release_api_url(releases_url)?;
+    let response = client
+        .get(&api_url)
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await
+        .map_err(|err| AppError::Network(format!("Failed to fetch release metadata: {err}")))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(AppError::Api(format!(
+            "Failed to fetch release metadata `{api_url}` ({status}): {body}"
+        )));
+    }
+
+    let release: GitHubLatestReleaseResponse = response
+        .json()
+        .await
+        .map_err(|err| AppError::Api(format!("Invalid release metadata JSON: {err}")))?;
+    let tag = release.tag_name.trim();
+    if tag.is_empty() {
+        return Err(AppError::Api(
+            "Release metadata does not include `tag_name`".to_string(),
+        ));
+    }
+    Ok(tag.to_string())
 }
 
 async fn download_asset_text(client: &reqwest::Client, url: &str) -> Result<String, AppError> {
@@ -156,7 +195,7 @@ async fn download_asset_text(client: &reqwest::Client, url: &str) -> Result<Stri
 async fn download_asset_bytes(
     client: &reqwest::Client,
     url: &str,
-) -> Result<DownloadedBinary, AppError> {
+) -> Result<Vec<u8>, AppError> {
     let response = client
         .get(url)
         .header("User-Agent", USER_AGENT)
@@ -172,14 +211,13 @@ async fn download_asset_bytes(
         )));
     }
 
-    let final_url = response.url().clone();
     let bytes = response
         .bytes()
         .await
         .map(|v| v.to_vec())
         .map_err(|err| AppError::Network(format!("Failed to read asset `{url}`: {err}")))?;
 
-    Ok(DownloadedBinary { bytes, final_url })
+    Ok(bytes)
 }
 
 fn parse_expected_sha256(checksums: &str, asset_name: &str) -> Option<String> {
@@ -349,9 +387,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        SelfUpdateOutcome, apply_release_update, compute_sha256_hex,
-        extract_tag_from_release_download_url, normalize_target_tag, parse_expected_sha256,
-        platform_asset_name, release_asset_url, release_version_from_tag,
+        SelfUpdateOutcome, apply_release_update, compute_sha256_hex, latest_release_api_url,
+        normalize_target_tag, parse_expected_sha256, platform_asset_name, release_asset_url,
+        release_version_from_tag,
     };
 
     fn temp_file_path(name: &str) -> PathBuf {
@@ -424,15 +462,20 @@ mod tests {
     }
 
     #[test]
-    fn extract_tag_from_release_download_url_parses_tag() {
-        let url = reqwest::Url::parse(
-            "https://github.com/huyixi/capmind/releases/download/cli-v9.9.9/cap-macOS",
-        )
-        .expect("valid url");
+    fn latest_release_api_url_derives_repo_endpoint() {
+        let api_url = latest_release_api_url("https://github.com/huyixi/capmind/releases")
+            .expect("valid releases url");
         assert_eq!(
-            extract_tag_from_release_download_url(&url).as_deref(),
-            Some("cli-v9.9.9")
+            api_url,
+            "https://api.github.com/repos/huyixi/capmind/releases/latest"
         );
+    }
+
+    #[test]
+    fn latest_release_api_url_rejects_non_github_release_urls() {
+        let err = latest_release_api_url("https://example.com/releases")
+            .expect_err("url should be rejected");
+        assert!(err.to_string().contains("Unable to derive repository owner/name"));
     }
 
     #[test]
