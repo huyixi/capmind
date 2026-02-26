@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 
-const RELEASES_API: &str = "https://api.github.com/repos/huyixi/cap-mind/releases";
+const RELEASES_API: &str = "https://api.github.com/repos/huyixi/capmind/releases";
 const USER_AGENT: &str = "cap-cli-self-update";
 const CHECKSUM_ASSET_NAME: &str = "SHA256SUMS";
 const TAG_PREFIX: &str = "cli-v";
