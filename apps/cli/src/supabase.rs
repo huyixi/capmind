@@ -622,9 +622,7 @@ async fn send_with_network_retry(
 
     for attempt in 0..attempts {
         let cloned = request.try_clone().ok_or_else(|| {
-            AppError::Network(format!(
-                "{context}: failed to clone request for retry"
-            ))
+            AppError::Network(format!("{context}: failed to clone request for retry"))
         })?;
         match cloned.send().await {
             Ok(response) => return Ok(response),
