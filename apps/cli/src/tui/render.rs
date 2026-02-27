@@ -78,9 +78,9 @@ fn render_memo_list_page(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget)
     let visible_indices = widget.memo_list_visible_indices();
 
     if list_area.height > 0 {
-        if widget.history().is_empty() {
+        if widget.history().is_empty() && widget.memo_list_loading() {
             frame.render_widget(
-                Paragraph::new("No memos yet.")
+                Paragraph::new("Fetching memo list...")
                     .style(pane_style)
                     .wrap(Wrap { trim: false }),
                 list_area,
@@ -126,6 +126,7 @@ fn render_memo_list_page(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget)
         None
     };
     let footer_text = memo_list_footer_text(
+        widget.memo_list_loading(),
         search_query,
         widget.status_message(),
         selected_memo_time.as_deref(),
@@ -137,20 +138,27 @@ fn render_memo_list_page(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget)
 }
 
 fn memo_list_footer_text(
+    loading: bool,
     search_query: Option<&str>,
     status_message: Option<&str>,
     selected_memo_time: Option<&str>,
 ) -> String {
-    if let Some(query) = search_query {
-        return format!("Search: {query}");
+    let mode_label = "Mode: LIST";
+    let detail = if loading {
+        Some("Fetching memo list...".to_string())
+    } else if let Some(query) = search_query {
+        Some(format!("Search: {query}"))
+    } else if let Some(status) = status_message {
+        Some(status.to_string())
+    } else {
+        selected_memo_time.map(ToString::to_string)
+    };
+
+    if let Some(detail) = detail {
+        format!("{mode_label} | {detail}")
+    } else {
+        mode_label.to_string()
     }
-    if let Some(status) = status_message {
-        return status.to_string();
-    }
-    if let Some(selected_time) = selected_memo_time {
-        return selected_time.to_string();
-    }
-    String::new()
 }
 
 fn format_memo_list_row(memo: &str, total_width: usize) -> String {
@@ -297,7 +305,7 @@ fn composer_footer_text(
     let mode_label = if mode == VimMode::Insert {
         "Mode: INSERT"
     } else {
-        "Mode: NORMAL (? help)"
+        "Mode: NORMAL"
     };
 
     let suffix = if quit_confirmation_pending {
@@ -682,7 +690,7 @@ mod tests {
     fn composer_footer_uses_quit_hint_when_pending() {
         assert_eq!(
             composer_footer_text(VimMode::Normal, true, None),
-            "Mode: NORMAL (? help) | Press Esc again to quit"
+            "Mode: NORMAL | Press Esc again to quit"
         );
     }
 
@@ -694,7 +702,7 @@ mod tests {
         );
         assert_eq!(
             composer_footer_text(VimMode::Normal, false, None),
-            "Mode: NORMAL (? help)"
+            "Mode: NORMAL"
         );
     }
 
@@ -763,29 +771,47 @@ mod tests {
     #[test]
     fn memo_list_footer_prefers_status_message() {
         assert_eq!(
-            memo_list_footer_text(None, Some("loading"), Some("2026-02-26 10:00:00")),
-            "loading"
+            memo_list_footer_text(false, None, Some("loading"), Some("2026-02-26 10:00:00")),
+            "Mode: LIST | loading"
         );
     }
 
     #[test]
     fn memo_list_footer_uses_selected_time_without_status() {
         assert_eq!(
-            memo_list_footer_text(None, None, Some("2026-02-26 10:00:00")),
-            "2026-02-26 10:00:00"
+            memo_list_footer_text(false, None, None, Some("2026-02-26 10:00:00")),
+            "Mode: LIST | 2026-02-26 10:00:00"
         );
     }
 
     #[test]
     fn memo_list_footer_is_empty_without_status_or_selection() {
-        assert_eq!(memo_list_footer_text(None, None, None), "");
+        assert_eq!(memo_list_footer_text(false, None, None, None), "Mode: LIST");
     }
 
     #[test]
     fn memo_list_footer_shows_search_query_when_active() {
         assert_eq!(
-            memo_list_footer_text(Some("memo"), Some("loading"), Some("2026-02-26 10:00:00")),
-            "Search: memo"
+            memo_list_footer_text(
+                false,
+                Some("memo"),
+                Some("loading"),
+                Some("2026-02-26 10:00:00")
+            ),
+            "Mode: LIST | Search: memo"
+        );
+    }
+
+    #[test]
+    fn memo_list_footer_shows_loading_status_while_fetching() {
+        assert_eq!(
+            memo_list_footer_text(
+                true,
+                Some("memo"),
+                Some("loading"),
+                Some("2026-02-26 10:00:00")
+            ),
+            "Mode: LIST | Fetching memo list..."
         );
     }
 }
