@@ -1,4 +1,4 @@
-# cap-cli
+# capmind
 
 Rust CLI to insert memo text into the existing Supabase `memos` table used by `memo.huyixi.com`.
 

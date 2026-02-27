@@ -5,10 +5,10 @@ This document describes how to release `apps/cli` in this monorepo.
 ## Version and tag format
 
 - Use semantic versioning: `MAJOR.MINOR.PATCH`
-- Git tag format must be: `cli-v<version>`
-- Example: `cli-v0.2.1`
+- Git tag format must be: `capmind-v<version>`
+- Example: `capmind-v0.2.1`
 
-Only tags that match `cli-v*` trigger GitHub Release publishing.
+Only tags that match `capmind-v*` trigger GitHub Release publishing.
 
 ## Signing setup (required once per machine)
 
@@ -67,13 +67,13 @@ pnpm run build:cli
 ```bash
 git add apps/cli/Cargo.toml
 git commit -S -m "chore(cli): release v0.2.1"
-git tag -s cli-v0.2.1 -m "cli-v0.2.1"
-git tag -v cli-v0.2.1
+git tag -s capmind-v0.2.1 -m "capmind-v0.2.1"
+git tag -v capmind-v0.2.1
 git push origin HEAD
-git push origin cli-v0.2.1
+git push origin capmind-v0.2.1
 ```
 
-Do not use lightweight tags (for example `git tag cli-v0.2.1`) for releases.
+Do not use lightweight tags (for example `git tag capmind-v0.2.1`) for releases.
 
 ## What the workflow does
 
@@ -81,19 +81,19 @@ Workflow file: `.github/workflows/cli-release.yml`
 
 - Builds on `ubuntu-latest`, `macos-latest`, and `windows-latest`
 - Produces binaries:
-  - `cap-Linux`
-  - `cap-macOS`
-  - `cap-Windows.exe`
-- On tag trigger (`cli-v*`), publishes a GitHub Release with generated notes
+  - `capmind-Linux`
+  - `capmind-macOS`
+  - `capmind-Windows.exe`
+- On tag trigger (`capmind-v*`), publishes a GitHub Release with generated notes
 - Generates and uploads `SHA256SUMS` for all release binaries
 
 Homebrew tap sync workflow: `.github/workflows/cli-homebrew-tap-sync.yml`
 
 - Trigger:
-  - `push` tag `cli-v*` (primary trigger)
+  - `push` tag `capmind-v*` (primary trigger)
   - `release.published` (compatible trigger)
   - `workflow_dispatch` (manual)
-- Downloads release assets (`cap-*`) and computes SHA-256
+- Downloads release assets (`capmind-*`) and computes SHA-256
 - Clones tap repo and updates formula `version`, `url`, and `sha256`
 - Commits and pushes formula update to tap repo
 
@@ -104,7 +104,7 @@ Required repository settings in this repo:
 - Variable: `HOMEBREW_TAP_REPO`
   - Example: `huyixi/homebrew-tap`
 - Variable: `HOMEBREW_FORMULA_PATH`
-  - Example: `Formula/cap.rb`
+  - Example: `Formula/capmind.rb`
 
 ## Manual trigger behavior
 
@@ -117,7 +117,7 @@ You can run the tap sync workflow manually via `workflow_dispatch` when needed.
 
 1. Fix the issue in a new commit.
 2. Bump patch version (for example `0.2.1` -> `0.2.2`).
-3. Create and push a signed tag `cli-v0.2.2`.
+3. Create and push a signed tag `capmind-v0.2.2`.
 4. Mark the broken release as deprecated in GitHub Release notes.
 
 Do not reuse or move an existing release tag.
@@ -125,7 +125,7 @@ Do not reuse or move an existing release tag.
 ## Verify checksums after publish
 
 ```bash
-gh release download cli-v0.2.1 -p "cap-*" -p "SHA256SUMS"
+gh release download capmind-v0.2.1 -p "capmind-*" -p "SHA256SUMS"
 sha256sum -c SHA256SUMS
 ```
 

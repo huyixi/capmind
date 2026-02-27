@@ -9,7 +9,7 @@
     "dev:cli": "turbo run dev --filter=./apps/cli",
     "build": "turbo run build",
     "build:web": "turbo run build --filter=./apps/web",
-    "build:cli": "cargo build --release -p cap-cli",
+    "build:cli": "cargo build --release -p capmind",
     "lint": "turbo run lint",
     "lint:web": "turbo run lint --filter=./apps/web",
     "lint:cli": "turbo run lint --filter=./apps/cli",

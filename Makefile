@@ -1,4 +1,4 @@
-CAP_PKG ?= cap-cli
+CAP_PKG ?= capmind
 CAP_PATH ?= apps/cli
 CAP_BIN ?= cap
 BIN_DIR ?= $(HOME)/.cargo/bin

@@ -8,9 +8,9 @@ use sha2::{Digest, Sha256};
 use crate::error::AppError;
 
 const RELEASES_URL: &str = "https://github.com/huyixi/capmind/releases";
-const USER_AGENT: &str = "cap-cli-self-update";
+const USER_AGENT: &str = "capmind-self-update";
 const CHECKSUM_ASSET_NAME: &str = "SHA256SUMS";
-const TAG_PREFIX: &str = "cli-v";
+const TAG_PREFIX: &str = "capmind-v";
 
 struct UpdateConfig<'a> {
     releases_url: &'a str,
@@ -81,9 +81,9 @@ async fn run_self_update_with_config(
 
 fn platform_asset_name() -> Result<&'static str, AppError> {
     match std::env::consts::OS {
-        "linux" => Ok("cap-Linux"),
-        "macos" => Ok("cap-macOS"),
-        "windows" => Ok("cap-Windows.exe"),
+        "linux" => Ok("capmind-Linux"),
+        "macos" => Ok("capmind-macOS"),
+        "windows" => Ok("capmind-Windows.exe"),
         other => Err(AppError::Api(format!(
             "Update is not supported on this platform: {other}"
         ))),
@@ -405,34 +405,34 @@ mod tests {
 
     #[test]
     fn normalize_target_tag_adds_prefix() {
-        assert_eq!(normalize_target_tag("0.2.1"), "cli-v0.2.1");
-        assert_eq!(normalize_target_tag(" cli-v0.2.2 "), "cli-v0.2.2");
+        assert_eq!(normalize_target_tag("0.2.1"), "capmind-v0.2.1");
+        assert_eq!(normalize_target_tag(" capmind-v0.2.2 "), "capmind-v0.2.2");
     }
 
     #[test]
     fn release_version_from_tag_strips_prefix() {
-        assert_eq!(release_version_from_tag("cli-v0.2.1"), "0.2.1");
+        assert_eq!(release_version_from_tag("capmind-v0.2.1"), "0.2.1");
         assert_eq!(release_version_from_tag("v0.2.1"), "v0.2.1");
     }
 
     #[test]
     fn parse_expected_sha256_supports_common_formats() {
         let checksums = "\
-1111111111111111111111111111111111111111111111111111111111111111  cap-Linux\n\
-2222222222222222222222222222222222222222222222222222222222222222  ./cap-macOS\n\
-3333333333333333333333333333333333333333333333333333333333333333 *cap-Windows.exe\n\
+1111111111111111111111111111111111111111111111111111111111111111  capmind-Linux\n\
+2222222222222222222222222222222222222222222222222222222222222222  ./capmind-macOS\n\
+3333333333333333333333333333333333333333333333333333333333333333 *capmind-Windows.exe\n\
 ";
 
         assert_eq!(
-            parse_expected_sha256(checksums, "cap-Linux").as_deref(),
+            parse_expected_sha256(checksums, "capmind-Linux").as_deref(),
             Some("1111111111111111111111111111111111111111111111111111111111111111")
         );
         assert_eq!(
-            parse_expected_sha256(checksums, "cap-macOS").as_deref(),
+            parse_expected_sha256(checksums, "capmind-macOS").as_deref(),
             Some("2222222222222222222222222222222222222222222222222222222222222222")
         );
         assert_eq!(
-            parse_expected_sha256(checksums, "cap-Windows.exe").as_deref(),
+            parse_expected_sha256(checksums, "capmind-Windows.exe").as_deref(),
             Some("3333333333333333333333333333333333333333333333333333333333333333")
         );
     }
@@ -441,12 +441,12 @@ mod tests {
     fn release_asset_url_uses_latest_or_tag_paths() {
         let base = "https://github.com/huyixi/capmind/releases";
         assert_eq!(
-            release_asset_url(base, None, "cap-macOS"),
-            "https://github.com/huyixi/capmind/releases/latest/download/cap-macOS"
+            release_asset_url(base, None, "capmind-macOS"),
+            "https://github.com/huyixi/capmind/releases/latest/download/capmind-macOS"
         );
         assert_eq!(
-            release_asset_url(base, Some("cli-v1.2.3"), "cap-macOS"),
-            "https://github.com/huyixi/capmind/releases/download/cli-v1.2.3/cap-macOS"
+            release_asset_url(base, Some("capmind-v1.2.3"), "capmind-macOS"),
+            "https://github.com/huyixi/capmind/releases/download/capmind-v1.2.3/capmind-macOS"
         );
     }
 
@@ -483,7 +483,7 @@ mod tests {
         std::fs::write(&exe_path, b"old-binary-content").expect("write old binary");
         let outcome = apply_release_update(
             "0.1.0",
-            "cli-v9.9.9",
+            "capmind-v9.9.9",
             &asset_name,
             &checksums_body,
             &binary_body,
@@ -499,7 +499,7 @@ mod tests {
             } => {
                 assert_eq!(from_version, "0.1.0");
                 assert_eq!(to_version, "9.9.9");
-                assert_eq!(tag, "cli-v9.9.9");
+                assert_eq!(tag, "capmind-v9.9.9");
             }
             other => panic!("unexpected outcome: {other:?}"),
         }
@@ -526,7 +526,7 @@ mod tests {
         std::fs::write(&exe_path, old).expect("write old binary");
         let err = apply_release_update(
             "0.1.0",
-            "cli-v9.9.9",
+            "capmind-v9.9.9",
             &asset_name,
             &checksums_body,
             &binary_body,

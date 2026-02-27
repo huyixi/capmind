@@ -3,7 +3,7 @@
 Monorepo containing:
 
 - `apps/web`: Next.js app (migrated from `cap.huyixi.com`)
-- `apps/cli`: Rust CLI (migrated from `cap-cli`)
+- `apps/cli`: Rust CLI (`capmind`)
 
 ## Structure
 
@@ -73,7 +73,7 @@ pnpm run fmt:cli
 
 - `web-ci`: path-scoped workflow for `apps/web/**`
 - `cli-ci`: path-scoped workflow for `apps/cli/**`
-- `cli-release`: independent CLI release workflow (manual or push tag `cli-v*`)
+- `cli-release`: independent CLI release workflow (manual or push tag `capmind-v*`)
 - `cli-homebrew-tap-sync`: syncs Homebrew tap formula after CLI release tags
 - `db-security-check`: validates Supabase RLS/policies/privileges for memo isolation (`supabase/**`)
 

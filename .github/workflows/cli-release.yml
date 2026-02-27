@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - "cli-v*"
+      - "capmind-v*"
 
 permissions:
   contents: read
@@ -31,23 +31,23 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p release
-          cp target/release/cap release/cap-${{ runner.os }}
+          cp target/release/cap release/capmind-${{ runner.os }}
 
       - name: Package binary (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path release -Force | Out-Null
-          Copy-Item target/release/cap.exe release/cap-${{ runner.os }}.exe
+          Copy-Item target/release/cap.exe release/capmind-${{ runner.os }}.exe
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cap-${{ runner.os }}
+          name: capmind-${{ runner.os }}
           path: release/*
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/cli-v')
+    if: startsWith(github.ref, 'refs/tags/capmind-v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -57,14 +57,14 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: cap-*
+          pattern: capmind-*
           merge-multiple: true
           path: release
 
       - name: Generate SHA256SUMS
         run: |
           cd release
-          ls -1 cap-* | sort | xargs sha256sum > SHA256SUMS
+          ls -1 capmind-* | sort | xargs sha256sum > SHA256SUMS
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

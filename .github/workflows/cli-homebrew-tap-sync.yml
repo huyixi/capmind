@@ -3,13 +3,13 @@ name: cli-homebrew-tap-sync
 on:
   push:
     tags:
-      - "cli-v*"
+      - "capmind-v*"
   release:
     types: [published]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (for example: cli-v0.2.6)"
+        description: "Release tag (for example: capmind-v0.2.6)"
         required: true
         type: string
       tap_repo:
@@ -29,9 +29,9 @@ jobs:
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' &&
-       startsWith(github.ref_name, 'cli-v')) ||
+       startsWith(github.ref_name, 'capmind-v')) ||
       (github.event_name == 'release' &&
-       startsWith(github.event.release.tag_name, 'cli-v') &&
+       startsWith(github.event.release.tag_name, 'capmind-v') &&
        github.event.release.draft == false &&
        github.event.release.prerelease == false)
     runs-on: ubuntu-latest
@@ -52,8 +52,8 @@ jobs:
             exit 1
           fi
 
-          if [[ "${RELEASE_TAG}" != cli-v* ]]; then
-            echo "::error::Release tag must start with cli-v. Got: ${RELEASE_TAG}"
+          if [[ "${RELEASE_TAG}" != capmind-v* ]]; then
+            echo "::error::Release tag must start with capmind-v. Got: ${RELEASE_TAG}"
             exit 1
           fi
 
@@ -67,12 +67,12 @@ jobs:
           fi
 
           if [ -z "${FORMULA_PATH:-}" ]; then
-            FORMULA_PATH="Formula/cap.rb"
+            FORMULA_PATH="Formula/capmind.rb"
           fi
 
           echo "TAP_REPO=${TAP_REPO}" >> "${GITHUB_ENV}"
           echo "FORMULA_PATH=${FORMULA_PATH}" >> "${GITHUB_ENV}"
-          echo "RELEASE_VERSION=${RELEASE_TAG#cli-v}" >> "${GITHUB_ENV}"
+          echo "RELEASE_VERSION=${RELEASE_TAG#capmind-v}" >> "${GITHUB_ENV}"
 
       - name: Download release assets
         shell: bash
@@ -105,9 +105,9 @@ jobs:
           gh release download "${RELEASE_TAG}" \
             --repo "${SOURCE_REPO}" \
             --dir release \
-            --pattern "cap-*"
-          if ! ls release/cap-* >/dev/null 2>&1; then
-            echo "::error::No cap-* assets found in release ${RELEASE_TAG}."
+            --pattern "capmind-*"
+          if ! ls release/capmind-* >/dev/null 2>&1; then
+            echo "::error::No capmind-* assets found in release ${RELEASE_TAG}."
             exit 1
           fi
 
@@ -116,7 +116,7 @@ jobs:
         run: |
           set -euo pipefail
           cd release
-          sha256sum cap-* > SHA256SUMS.generated
+          sha256sum capmind-* > SHA256SUMS.generated
           cat SHA256SUMS.generated
 
       - name: Clone tap repository
