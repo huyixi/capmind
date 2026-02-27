@@ -76,6 +76,7 @@ fn render_memo_list_page(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget)
         width: area.width,
         height: list_height,
     };
+    let visible_indices = widget.memo_list_visible_indices();
 
     if list_area.height > 0 {
         if widget.history().is_empty() {
@@ -85,10 +86,17 @@ fn render_memo_list_page(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget)
                     .wrap(Wrap { trim: false }),
                 list_area,
             );
+        } else if visible_indices.is_empty() {
+            frame.render_widget(
+                Paragraph::new("No matches.")
+                    .style(pane_style)
+                    .wrap(Wrap { trim: false }),
+                list_area,
+            );
         } else {
-            let items: Vec<ListItem<'_>> = widget
-                .history()
+            let items: Vec<ListItem<'_>> = visible_indices
                 .iter()
+                .filter_map(|index| widget.history().get(*index))
                 .map(|cell| {
                     let memo_text =
                         history_row_display_text(&cell.full_text, cell.memo_id.is_some());
@@ -105,17 +113,21 @@ fn render_memo_list_page(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget)
                 )
                 .highlight_symbol("");
             let mut state = ListState::default();
-            state.select(widget.selected_history());
+            state.select(widget.memo_list_selected_visible_index());
             frame.render_stateful_widget(list, list_area, &mut state);
         }
     }
 
     let selected_memo_time = widget
-        .selected_history()
-        .and_then(|index| widget.history().get(index))
+        .memo_list_selected_cell()
         .map(|cell| cell.created_at.format("%Y-%m-%d %H:%M:%S").to_string());
+    let search_query = if widget.memo_list_search_mode() || !widget.memo_list_query().is_empty() {
+        Some(widget.memo_list_query())
+    } else {
+        None
+    };
     let footer_text = memo_list_footer_text(
-        widget.memo_list_loading(),
+        search_query,
         widget.status_message(),
         selected_memo_time.as_deref(),
     );
@@ -126,23 +138,15 @@ fn render_memo_list_page(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget)
 }
 
 fn memo_list_footer_text(
-    memo_list_loading: bool,
+    search_query: Option<&str>,
     status_message: Option<&str>,
     selected_memo_time: Option<&str>,
 ) -> String {
-    let mode_label = "Mode: MEMO LIST";
-    let suffix = if memo_list_loading {
-        Some(MEMO_LIST_LOADING_FOOTER)
-    } else if let Some(status) = status_message {
-        Some(status)
-    } else {
-        selected_memo_time
-    };
-
-    if let Some(value) = suffix {
-        format!("{mode_label} | {value}")
-    } else {
-        mode_label.to_string()
+    if let Some(query) = search_query {
+        return format!("Search: {query}");
+    }
+    if let Some(status) = status_message {
+        return status.to_string();
     }
 }
 
@@ -443,7 +447,12 @@ i/a/I/A/o/O enter insert actions\n\
         HelpOverlayContext::MemoList => {
             "Memo List\n\
 j/k or arrows move selection\n\
+Ctrl+f/PageDown next page\n\
+Ctrl+b/PageUp previous page\n\
+/ enter search\n\
+Enter apply search | Esc clear search\n\
 Enter open selected memo\n\
+y copy selected memo\n\
 r refresh memo list\n\
 d delete selected memo\n\
 q or Esc return to composer\n\
@@ -741,35 +750,39 @@ mod tests {
         let memo_list = help_overlay_content(HelpOverlayContext::MemoList);
         assert!(memo_list.contains("Memo List"));
         assert!(memo_list.contains("Enter open selected memo"));
+        assert!(memo_list.contains("y copy selected memo"));
         assert!(memo_list.contains("r refresh memo list"));
+        assert!(memo_list.contains("Ctrl+f/PageDown next page"));
+        assert!(memo_list.contains("Ctrl+b/PageUp previous page"));
+        assert!(memo_list.contains("/ enter search"));
     }
 
     #[test]
     fn memo_list_footer_prefers_status_message() {
         assert_eq!(
-            memo_list_footer_text(false, Some("loading"), Some("2026-02-26 10:00:00")),
-            "Mode: MEMO LIST | loading"
-        );
-    }
-
-    #[test]
-    fn memo_list_footer_uses_loading_text_while_fetching() {
-        assert_eq!(
-            memo_list_footer_text(true, Some("stale status"), Some("2026-02-26 10:00:00")),
-            "Mode: MEMO LIST | Loading memos..."
+            memo_list_footer_text(None, Some("loading"), Some("2026-02-26 10:00:00")),
+            "loading"
         );
     }
 
     #[test]
     fn memo_list_footer_uses_selected_time_without_status() {
         assert_eq!(
-            memo_list_footer_text(false, None, Some("2026-02-26 10:00:00")),
-            "Mode: MEMO LIST | 2026-02-26 10:00:00"
+            memo_list_footer_text(None, None, Some("2026-02-26 10:00:00")),
+            "2026-02-26 10:00:00"
         );
     }
 
     #[test]
     fn memo_list_footer_is_empty_without_status_or_selection() {
-        assert_eq!(memo_list_footer_text(false, None, None), "Mode: MEMO LIST");
+        assert_eq!(memo_list_footer_text(None, None, None), "");
+    }
+
+    #[test]
+    fn memo_list_footer_shows_search_query_when_active() {
+        assert_eq!(
+            memo_list_footer_text(Some("memo"), Some("loading"), Some("2026-02-26 10:00:00")),
+            "Search: memo"
+        );
     }
 }

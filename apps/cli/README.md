@@ -53,7 +53,7 @@ TUI keys:
 - `d` (in History): open delete confirmation for selected memo
 - `Enter` / `y` / `d` (in delete confirmation): confirm delete
 - `n` / `Esc` (in delete confirmation): cancel delete
-- Memo list page: `j`/`k` or `↑`/`↓` move, `Enter` loads selected memo into composer, `r` refreshes memo list, `d` opens delete confirmation, `q` or `Esc` returns to composer page, `?` opens help popup
+- Memo list page: `j`/`k` or `↑`/`↓` move, `Ctrl+f`/`Ctrl+b` (or `PageDown`/`PageUp`) page down/up, `/` enters search, search is case-insensitive contains, `Enter` applies search / loads selected memo (outside search mode), `Esc` clears search (in search mode) or returns to composer page, `y` copies selected memo text, `r` refreshes memo list, `d` opens delete confirmation, `?` opens help popup
 
 Composer page starts in single-pane mode (no history pane shown).
 Use `p` in `NORMAL` mode when you want to show the split composer/history layout.
