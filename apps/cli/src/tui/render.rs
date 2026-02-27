@@ -17,6 +17,7 @@ const COMPOSER_PLACEHOLDER: &str = "What's on your mind?";
 const COMPOSER_EDIT_PLACEHOLDER: &str = "Editing selected memo...";
 const COMPOSER_QUIT_CONFIRM_PLACEHOLDER: &str = "Press Esc again to quit";
 const IMAGE_ONLY_MEMO_PLACEHOLDER: &str = "[Image-only memo]";
+const MEMO_LIST_LOADING_FOOTER: &str = "Loading memos...";
 
 pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget) {
     let area = frame.area();
@@ -113,18 +114,36 @@ fn render_memo_list_page(frame: &mut Frame<'_>, area: Rect, widget: &ChatWidget)
         .selected_history()
         .and_then(|index| widget.history().get(index))
         .map(|cell| cell.created_at.format("%Y-%m-%d %H:%M:%S").to_string());
-    let footer_text = memo_list_footer_text(widget.status_message(), selected_memo_time.as_deref());
+    let footer_text = memo_list_footer_text(
+        widget.memo_list_loading(),
+        widget.status_message(),
+        selected_memo_time.as_deref(),
+    );
     frame.render_widget(
         Paragraph::new(footer_text).style(Style::default().add_modifier(Modifier::DIM)),
         footer,
     );
 }
 
-fn memo_list_footer_text(status_message: Option<&str>, selected_memo_time: Option<&str>) -> String {
-    if let Some(status) = status_message {
-        return status.to_string();
+fn memo_list_footer_text(
+    memo_list_loading: bool,
+    status_message: Option<&str>,
+    selected_memo_time: Option<&str>,
+) -> String {
+    let mode_label = "Mode: MEMO LIST";
+    let suffix = if memo_list_loading {
+        Some(MEMO_LIST_LOADING_FOOTER)
+    } else if let Some(status) = status_message {
+        Some(status)
+    } else {
+        selected_memo_time
+    };
+
+    if let Some(value) = suffix {
+        format!("{mode_label} | {value}")
+    } else {
+        mode_label.to_string()
     }
-    selected_memo_time.unwrap_or("").to_string()
 }
 
 fn format_memo_list_row(memo: &str, total_width: usize) -> String {
@@ -268,16 +287,22 @@ fn composer_footer_text(
     quit_confirmation_pending: bool,
     status_message: Option<&str>,
 ) -> String {
-    if let Some(status) = status_message {
-        return status.to_string();
-    }
-
-    if quit_confirmation_pending {
-        COMPOSER_QUIT_CONFIRM_PLACEHOLDER.to_string()
-    } else if mode == VimMode::Insert {
-        "Mode: INSERT".to_string()
+    let mode_label = if mode == VimMode::Insert {
+        "Mode: INSERT"
     } else {
-        "Mode: NORMAL (? help)".to_string()
+        "Mode: NORMAL (? help)"
+    };
+
+    let suffix = if quit_confirmation_pending {
+        Some(COMPOSER_QUIT_CONFIRM_PLACEHOLDER)
+    } else {
+        status_message
+    };
+
+    if let Some(value) = suffix {
+        format!("{mode_label} | {value}")
+    } else {
+        mode_label.to_string()
     }
 }
 
@@ -634,10 +659,10 @@ mod tests {
     }
 
     #[test]
-    fn composer_footer_uses_status_before_mode_tip() {
+    fn composer_footer_appends_status_after_mode() {
         assert_eq!(
             composer_footer_text(VimMode::Insert, false, Some("saving...")),
-            "saving..."
+            "Mode: INSERT | saving..."
         );
     }
 
@@ -645,7 +670,19 @@ mod tests {
     fn composer_footer_uses_quit_hint_when_pending() {
         assert_eq!(
             composer_footer_text(VimMode::Normal, true, None),
-            "Press Esc again to quit"
+            "Mode: NORMAL (? help) | Press Esc again to quit"
+        );
+    }
+
+    #[test]
+    fn composer_footer_uses_mode_when_no_status_or_quit_hint() {
+        assert_eq!(
+            composer_footer_text(VimMode::Insert, false, None),
+            "Mode: INSERT"
+        );
+        assert_eq!(
+            composer_footer_text(VimMode::Normal, false, None),
+            "Mode: NORMAL (? help)"
         );
     }
 
@@ -710,21 +747,29 @@ mod tests {
     #[test]
     fn memo_list_footer_prefers_status_message() {
         assert_eq!(
-            memo_list_footer_text(Some("loading"), Some("2026-02-26 10:00:00")),
-            "loading"
+            memo_list_footer_text(false, Some("loading"), Some("2026-02-26 10:00:00")),
+            "Mode: MEMO LIST | loading"
+        );
+    }
+
+    #[test]
+    fn memo_list_footer_uses_loading_text_while_fetching() {
+        assert_eq!(
+            memo_list_footer_text(true, Some("stale status"), Some("2026-02-26 10:00:00")),
+            "Mode: MEMO LIST | Loading memos..."
         );
     }
 
     #[test]
     fn memo_list_footer_uses_selected_time_without_status() {
         assert_eq!(
-            memo_list_footer_text(None, Some("2026-02-26 10:00:00")),
-            "2026-02-26 10:00:00"
+            memo_list_footer_text(false, None, Some("2026-02-26 10:00:00")),
+            "Mode: MEMO LIST | 2026-02-26 10:00:00"
         );
     }
 
     #[test]
     fn memo_list_footer_is_empty_without_status_or_selection() {
-        assert_eq!(memo_list_footer_text(None, None), "");
+        assert_eq!(memo_list_footer_text(false, None, None), "Mode: MEMO LIST");
     }
 }

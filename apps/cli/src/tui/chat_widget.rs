@@ -74,6 +74,7 @@ pub struct ChatWidget {
     quit_confirmation_pending: bool,
     page_mode: PageMode,
     split_list_open: bool,
+    memo_list_loading: bool,
     help_overlay: Option<HelpOverlayContext>,
     status_message: Option<String>,
     status_message_expires_at: Option<Instant>,
@@ -101,6 +102,7 @@ impl ChatWidget {
             quit_confirmation_pending: false,
             page_mode: PageMode::Composer,
             split_list_open: false,
+            memo_list_loading: false,
             help_overlay: None,
             status_message: None,
             status_message_expires_at: None,
@@ -224,6 +226,14 @@ impl ChatWidget {
 
     pub fn split_list_open(&self) -> bool {
         self.split_list_open
+    }
+
+    pub fn memo_list_loading(&self) -> bool {
+        self.memo_list_loading
+    }
+
+    pub fn set_memo_list_loading(&mut self, loading: bool) {
+        self.memo_list_loading = loading;
     }
 
     pub fn help_overlay(&self) -> Option<HelpOverlayContext> {
@@ -1162,6 +1172,18 @@ mod tests {
         assert_eq!(widget.page_mode(), PageMode::Composer);
         assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "memo-1");
         assert!(widget.bottom_pane_mut().composer_mut().is_insert_mode());
+    }
+
+    #[test]
+    fn memo_list_loading_flag_can_toggle() {
+        let mut widget = ChatWidget::new();
+        assert!(!widget.memo_list_loading());
+
+        widget.set_memo_list_loading(true);
+        assert!(widget.memo_list_loading());
+
+        widget.set_memo_list_loading(false);
+        assert!(!widget.memo_list_loading());
     }
 
     #[test]

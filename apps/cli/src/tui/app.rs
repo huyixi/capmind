@@ -30,7 +30,10 @@ pub struct ComposeApp<'a> {
 }
 
 enum BackgroundEvent {
-    HistoryLoaded(Vec<RecentMemo>),
+    InitialHistoryLoaded(Vec<RecentMemo>),
+    InitialHistoryLoadFailed,
+    RefreshHistoryLoaded(Vec<RecentMemo>),
+    RefreshHistoryFailed(String),
     SubmitCreateSuccess {
         normalized_text: String,
         inserted: InsertedMemo,
@@ -100,7 +103,7 @@ impl<'a> ComposeApp<'a> {
                 WidgetAction::None => {}
                 WidgetAction::Quit => break,
                 WidgetAction::RefreshHistory => {
-                    self.handle_refresh_history().await;
+                    self.handle_refresh_history(background_tx.clone());
                 }
                 WidgetAction::SubmitCreate(text) => {
                     self.handle_submit_create(background_tx.clone(), text);
@@ -139,16 +142,18 @@ impl<'a> ComposeApp<'a> {
         Ok(())
     }
 
-    fn start_history_loader(&self, tx: UnboundedSender<BackgroundEvent>) {
+    fn start_history_loader(&mut self, tx: UnboundedSender<BackgroundEvent>) {
+        self.widget.set_memo_list_loading(true);
         let client = (*self.client).clone();
         tokio::spawn(async move {
-            let Ok(session) = authenticate_with_stored_token(&client).await else {
-                return;
+            let event = match authenticate_with_stored_token(&client).await {
+                Ok(session) => match client.list_recent_memos(&session.access_token).await {
+                    Ok(memos) => BackgroundEvent::InitialHistoryLoaded(memos),
+                    Err(_) => BackgroundEvent::InitialHistoryLoadFailed,
+                },
+                Err(_) => BackgroundEvent::InitialHistoryLoadFailed,
             };
-            let Ok(memos) = client.list_recent_memos(&session.access_token).await else {
-                return;
-            };
-            let _ = tx.send(BackgroundEvent::HistoryLoaded(memos));
+            let _ = tx.send(event);
         });
     }
 
@@ -177,8 +182,20 @@ impl<'a> ComposeApp<'a> {
 
         while let Ok(event) = rx.try_recv() {
             match event {
-                BackgroundEvent::HistoryLoaded(memos) => {
+                BackgroundEvent::InitialHistoryLoaded(memos) => {
+                    self.widget.set_memo_list_loading(false);
                     self.widget.hydrate_history_from_memos(memos);
+                }
+                BackgroundEvent::InitialHistoryLoadFailed => {
+                    self.widget.set_memo_list_loading(false);
+                }
+                BackgroundEvent::RefreshHistoryLoaded(memos) => {
+                    self.widget.set_memo_list_loading(false);
+                    self.widget.refresh_history_from_memos(memos);
+                }
+                BackgroundEvent::RefreshHistoryFailed(message) => {
+                    self.widget.set_memo_list_loading(false);
+                    self.widget.on_validation_error(&message);
                 }
                 BackgroundEvent::SubmitCreateSuccess {
                     normalized_text,
@@ -304,22 +321,28 @@ impl<'a> ComposeApp<'a> {
         }
     }
 
-    async fn handle_refresh_history(&mut self) {
-        let session = match authenticate_with_stored_token(self.client).await {
-            Ok(session) => session,
-            Err(err) => {
-                self.widget
-                    .on_validation_error(&format!("Refresh memo list failed: {err}"));
-                return;
-            }
-        };
-
-        match self.client.list_recent_memos(&session.access_token).await {
-            Ok(memos) => self.widget.refresh_history_from_memos(memos),
-            Err(err) => self
-                .widget
-                .on_validation_error(&format!("Refresh memo list failed: {err}")),
+    fn handle_refresh_history(&mut self, tx: UnboundedSender<BackgroundEvent>) {
+        if self.widget.memo_list_loading() {
+            return;
         }
+        self.widget.set_memo_list_loading(true);
+
+        let client = (*self.client).clone();
+        tokio::spawn(async move {
+            let event = match authenticate_with_stored_token(&client).await {
+                Ok(session) => match client.list_recent_memos(&session.access_token).await {
+                    Ok(memos) => BackgroundEvent::RefreshHistoryLoaded(memos),
+                    Err(err) => BackgroundEvent::RefreshHistoryFailed(format!(
+                        "Refresh memo list failed: {err}"
+                    )),
+                },
+                Err(err) => BackgroundEvent::RefreshHistoryFailed(format!(
+                    "Refresh memo list failed: {err}"
+                )),
+            };
+
+            let _ = tx.send(event);
+        });
     }
 
     fn start_submit_create_submission(
