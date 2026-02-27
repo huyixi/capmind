@@ -139,6 +139,13 @@ jobs:
           release_version = os.environ["RELEASE_VERSION"]
           formula_rel = os.environ["FORMULA_PATH"]
           formula_path = pathlib.Path("tap") / formula_rel
+          formula_name = pathlib.Path(formula_rel).stem
+
+          def to_formula_class(name: str) -> str:
+              parts = re.split(r"[^a-zA-Z0-9]+", name)
+              return "".join(p[:1].upper() + p[1:] for p in parts if p)
+
+          expected_class = to_formula_class(formula_name)
 
           if not formula_path.exists():
               print(f"::error::Formula file not found: {formula_path}")
@@ -159,12 +166,19 @@ jobs:
           version_re = re.compile(r'^(\s*version\s+")([^"]+)(".*)$')
           url_re = re.compile(r'^(\s*url\s+")([^"]*/releases/download/)([^/]+)(/([^"/]+))(".*)$')
           sha_re = re.compile(r'^(\s*sha256\s+")[0-9a-f]{64}(".*)$')
+          class_re = re.compile(r'^(\s*class\s+)([A-Za-z0-9_]+)(\s+<\s+Formula\s*)$')
 
+          class_updates = 0
           version_updates = 0
           url_updates = 0
           sha_updates = 0
 
           for i, line in enumerate(lines):
+              cm = class_re.match(line)
+              if cm and class_updates == 0 and cm.group(2) != expected_class:
+                  lines[i] = f"{cm.group(1)}{expected_class}{cm.group(3)}"
+                  class_updates += 1
+
               vm = version_re.match(line)
               if vm and version_updates == 0:
                   lines[i] = f'{vm.group(1)}{release_version}{vm.group(3)}'
@@ -200,7 +214,11 @@ jobs:
           formula_path.write_text(updated, encoding="utf-8")
 
           print(f"Updated formula: {formula_rel}")
-          print(f"version_updates={version_updates}, url_updates={url_updates}, sha_updates={sha_updates}")
+          print(
+              "class_updates="
+              f"{class_updates}, version_updates={version_updates}, "
+              f"url_updates={url_updates}, sha_updates={sha_updates}"
+          )
           PY
 
       - name: Commit and push
