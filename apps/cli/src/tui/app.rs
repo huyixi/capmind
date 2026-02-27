@@ -1,4 +1,5 @@
-use std::io;
+use std::io::{self, Write};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crossterm::event::{self, Event};
@@ -23,6 +24,11 @@ use super::chat_widget::{ChatWidget, WidgetAction};
 use super::render;
 
 const WQ_MAX_ATTEMPTS: usize = 3;
+
+enum CopyCommandError {
+    NotFound,
+    Failed(String),
+}
 
 pub struct ComposeApp<'a> {
     client: &'a SupabaseClient,
@@ -132,6 +138,9 @@ impl<'a> ComposeApp<'a> {
                     expected_version,
                 } => {
                     self.handle_delete_memo(memo_id, expected_version).await;
+                }
+                WidgetAction::CopySelectedMemo => {
+                    self.handle_copy_selected_memo();
                 }
             }
         }
@@ -322,6 +331,18 @@ impl<'a> ComposeApp<'a> {
         }
     }
 
+    fn handle_copy_selected_memo(&mut self) {
+        let Some(text) = self.widget.selected_memo_text().map(ToString::to_string) else {
+            self.widget.on_copy_error("No memo selected.");
+            return;
+        };
+
+        match copy_to_clipboard(&text) {
+            Ok(()) => self.widget.on_copy_success(),
+            Err(err) => self.widget.on_copy_error(&err),
+        }
+    }
+
     fn start_submit_create_submission(
         &self,
         tx: UnboundedSender<BackgroundEvent>,
@@ -468,6 +489,92 @@ fn wq_retry_delay(attempt: usize) -> Duration {
         1 => Duration::from_secs(1),
         2 => Duration::from_secs(3),
         _ => Duration::from_secs(0),
+    }
+}
+
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return copy_with_command("pbcopy", &[], text).map_err(|err| match err {
+            CopyCommandError::NotFound => "`pbcopy` not found.".to_string(),
+            CopyCommandError::Failed(message) => message,
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return copy_with_command("clip", &[], text).map_err(|err| match err {
+            CopyCommandError::NotFound => "`clip` not found.".to_string(),
+            CopyCommandError::Failed(message) => message,
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        for (program, args) in [
+            ("wl-copy", Vec::new()),
+            ("xclip", vec!["-selection", "clipboard"]),
+            ("xsel", vec!["--clipboard", "--input"]),
+        ] {
+            match copy_with_command(program, &args, text) {
+                Ok(()) => return Ok(()),
+                Err(CopyCommandError::NotFound) => continue,
+                Err(CopyCommandError::Failed(message)) => return Err(message),
+            }
+        }
+        return Err("No clipboard tool found (install `wl-copy`, `xclip`, or `xsel`).".to_string());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = text;
+        Err("Clipboard copy is not supported on this platform.".to_string())
+    }
+}
+
+fn copy_with_command(program: &str, args: &[&str], text: &str) -> Result<(), CopyCommandError> {
+    let mut child = match Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            if err.kind() == io::ErrorKind::NotFound {
+                return Err(CopyCommandError::NotFound);
+            }
+            return Err(CopyCommandError::Failed(format!(
+                "Failed to start `{program}`: {err}"
+            )));
+        }
+    };
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(text.as_bytes()).map_err(|err| {
+            CopyCommandError::Failed(format!("Failed to write clipboard data: {err}"))
+        })?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|err| CopyCommandError::Failed(format!("Clipboard command failed: {err}")))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        Err(CopyCommandError::Failed(format!(
+            "`{program}` exited with status {}",
+            output.status
+        )))
+    } else {
+        Err(CopyCommandError::Failed(format!(
+            "`{program}` failed: {stderr}"
+        )))
     }
 }
 

@@ -11,6 +11,7 @@ use super::composer::VimMode;
 use super::types::{FocusArea, HistoryCell};
 
 const SUBMIT_SUCCESS_TIP_DURATION: Duration = Duration::from_secs(1);
+const MEMO_LIST_PAGE_STEP: isize = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WidgetAction {
@@ -32,6 +33,7 @@ pub enum WidgetAction {
         memo_id: String,
         expected_version: String,
     },
+    CopySelectedMemo,
     Quit,
 }
 
@@ -68,6 +70,9 @@ pub struct ChatWidget {
     bottom_pane: BottomPane,
     history: VecDeque<HistoryCell>,
     selected_history: usize,
+    filtered_history_indices: Vec<usize>,
+    memo_list_search_mode: bool,
+    memo_list_query: String,
     focus: FocusArea,
     pending_delete: Option<PendingDelete>,
     composer_mode: ComposerMode,
@@ -95,6 +100,9 @@ impl ChatWidget {
             bottom_pane: BottomPane::default(),
             history: VecDeque::new(),
             selected_history: 0,
+            filtered_history_indices: Vec::new(),
+            memo_list_search_mode: false,
+            memo_list_query: String::new(),
             focus: FocusArea::Composer,
             pending_delete: None,
             composer_mode: ComposerMode::Create,
@@ -218,6 +226,38 @@ impl ChatWidget {
         self.focus
     }
 
+    pub fn selected_memo_text(&self) -> Option<&str> {
+        let index = self.selected_history_for_current_list()?;
+        self.history.get(index).map(|cell| cell.full_text.as_str())
+    }
+
+    pub fn memo_list_visible_indices(&self) -> Vec<usize> {
+        if self.memo_list_filter_active() {
+            return self.filtered_history_indices.clone();
+        }
+        (0..self.history.len()).collect()
+    }
+
+    pub fn memo_list_selected_visible_index(&self) -> Option<usize> {
+        let selected = self.selected_history_index_for_memo_list()?;
+        self.memo_list_visible_indices()
+            .iter()
+            .position(|index| *index == selected)
+    }
+
+    pub fn memo_list_selected_cell(&self) -> Option<&HistoryCell> {
+        let selected = self.selected_history_index_for_memo_list()?;
+        self.history.get(selected)
+    }
+
+    pub fn memo_list_search_mode(&self) -> bool {
+        self.memo_list_search_mode
+    }
+
+    pub fn memo_list_query(&self) -> &str {
+        &self.memo_list_query
+    }
+
     pub fn page_mode(&self) -> PageMode {
         self.page_mode
     }
@@ -276,6 +316,7 @@ impl ChatWidget {
             memo_id.to_string(),
             version.to_string(),
         );
+        self.maybe_recompute_memo_list_filter();
         self.reset_composer_state();
         self.show_submit_success_tip();
     }
@@ -306,6 +347,7 @@ impl ChatWidget {
             forked.id.clone(),
             forked.version.clone(),
         );
+        self.maybe_recompute_memo_list_filter();
         self.reset_composer_state();
         self.show_submit_success_tip();
     }
@@ -313,11 +355,13 @@ impl ChatWidget {
     pub fn on_submit_error(&mut self, text: &str, message: &str) {
         let full_text = format!("{message}\n\n{text}");
         self.push_history(full_text);
+        self.maybe_recompute_memo_list_filter();
         self.set_status_message(message.to_string());
     }
 
     pub fn on_validation_error(&mut self, message: &str) {
         self.push_history(message.to_string());
+        self.maybe_recompute_memo_list_filter();
         self.set_status_message(message.to_string());
     }
 
@@ -345,6 +389,7 @@ impl ChatWidget {
 
         if self.history.is_empty() {
             self.selected_history = 0;
+            self.maybe_recompute_memo_list_filter();
             self.focus = FocusArea::Composer;
             return;
         }
@@ -355,6 +400,7 @@ impl ChatWidget {
         if self.selected_history >= self.history.len() {
             self.selected_history = self.history.len().saturating_sub(1);
         }
+        self.maybe_recompute_memo_list_filter();
     }
 
     pub fn on_delete_error(&mut self, message: &str) {
@@ -369,6 +415,14 @@ impl ChatWidget {
             return;
         }
         self.upsert_history_memo(server_memo);
+    }
+
+    pub fn on_copy_success(&mut self) {
+        self.set_temporary_status_message("Copied memo.".to_string(), SUBMIT_SUCCESS_TIP_DURATION);
+    }
+
+    pub fn on_copy_error(&mut self, message: &str) {
+        self.set_status_message(format!("Copy failed: {message}"));
     }
 
     pub fn hydrate_history_from_memos(&mut self, memos: Vec<RecentMemo>) {
@@ -387,11 +441,12 @@ impl ChatWidget {
                 memo.version,
             );
         }
+        self.maybe_recompute_memo_list_filter();
     }
 
     pub fn refresh_history_from_memos(&mut self, memos: Vec<RecentMemo>) {
         let selected_memo_id = self
-            .selected_history()
+            .selected_history_for_current_list()
             .and_then(|index| self.history.get(index))
             .and_then(|cell| cell.memo_id.clone());
 
@@ -423,6 +478,7 @@ impl ChatWidget {
         {
             self.selected_history = position;
         }
+        self.maybe_recompute_memo_list_filter();
     }
 
     fn handle_composer_key(&mut self, key_event: KeyEvent) -> WidgetAction {
@@ -500,30 +556,61 @@ impl ChatWidget {
     }
 
     fn handle_memo_list_key(&mut self, key_event: KeyEvent) -> WidgetAction {
+        if self.memo_list_search_mode && self.handle_memo_list_search_input_key(key_event) {
+            return WidgetAction::None;
+        }
+
         if is_help_key(key_event) {
             self.help_overlay = Some(HelpOverlayContext::MemoList);
             return WidgetAction::None;
         }
 
         match key_event.code {
+            KeyCode::Char('/') if is_plain_or_shift(key_event.modifiers) => {
+                self.memo_list_search_mode = true;
+                self.recompute_memo_list_filter();
+                WidgetAction::None
+            }
+            KeyCode::PageUp => {
+                self.move_memo_list_selection(-MEMO_LIST_PAGE_STEP);
+                WidgetAction::None
+            }
+            KeyCode::PageDown => {
+                self.move_memo_list_selection(MEMO_LIST_PAGE_STEP);
+                WidgetAction::None
+            }
             KeyCode::Up => {
-                self.move_history_selection(-1);
+                self.move_memo_list_selection(-1);
+                WidgetAction::None
+            }
+            KeyCode::Char(c)
+                if key_event.modifiers.contains(KeyModifiers::CONTROL)
+                    && c.eq_ignore_ascii_case(&'b') =>
+            {
+                self.move_memo_list_selection(-MEMO_LIST_PAGE_STEP);
                 WidgetAction::None
             }
             KeyCode::Char(c)
                 if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'k') =>
             {
-                self.move_history_selection(-1);
+                self.move_memo_list_selection(-1);
                 WidgetAction::None
             }
             KeyCode::Down => {
-                self.move_history_selection(1);
+                self.move_memo_list_selection(1);
+                WidgetAction::None
+            }
+            KeyCode::Char(c)
+                if key_event.modifiers.contains(KeyModifiers::CONTROL)
+                    && c.eq_ignore_ascii_case(&'f') =>
+            {
+                self.move_memo_list_selection(MEMO_LIST_PAGE_STEP);
                 WidgetAction::None
             }
             KeyCode::Char(c)
                 if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'j') =>
             {
-                self.move_history_selection(1);
+                self.move_memo_list_selection(1);
                 WidgetAction::None
             }
             KeyCode::Enter => {
@@ -542,6 +629,11 @@ impl ChatWidget {
             {
                 WidgetAction::RefreshHistory
             }
+            KeyCode::Char(c)
+                if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'y') =>
+            {
+                WidgetAction::CopySelectedMemo
+            }
             KeyCode::Char(c) if c.eq_ignore_ascii_case(&'d') => {
                 self.start_delete_confirmation();
                 WidgetAction::None
@@ -551,6 +643,33 @@ impl ChatWidget {
                 WidgetAction::None
             }
             _ => WidgetAction::None,
+        }
+    }
+
+    fn handle_memo_list_search_input_key(&mut self, key_event: KeyEvent) -> bool {
+        match key_event.code {
+            KeyCode::Backspace => {
+                self.memo_list_query.pop();
+                self.recompute_memo_list_filter();
+                true
+            }
+            KeyCode::Enter => {
+                self.memo_list_search_mode = false;
+                true
+            }
+            KeyCode::Esc => {
+                self.memo_list_search_mode = false;
+                if !self.memo_list_query.is_empty() {
+                    self.clear_memo_list_filter();
+                }
+                true
+            }
+            KeyCode::Char(c) if is_plain_or_shift(key_event.modifiers) => {
+                self.memo_list_query.push(c);
+                self.recompute_memo_list_filter();
+                true
+            }
+            _ => false,
         }
     }
 
@@ -720,7 +839,7 @@ impl ChatWidget {
     }
 
     fn start_delete_confirmation(&mut self) {
-        let index = match self.selected_history() {
+        let index = match self.selected_history_for_current_list() {
             Some(v) => v,
             None => return,
         };
@@ -751,8 +870,31 @@ impl ChatWidget {
         self.selected_history = next;
     }
 
+    fn move_memo_list_selection(&mut self, delta: isize) {
+        if !self.memo_list_filter_active() {
+            self.move_history_selection(delta);
+            return;
+        }
+
+        if self.filtered_history_indices.is_empty() {
+            return;
+        }
+
+        let current_index = self
+            .selected_history_index_for_memo_list()
+            .unwrap_or(self.filtered_history_indices[0]);
+        let current_position = self
+            .filtered_history_indices
+            .iter()
+            .position(|index| *index == current_index)
+            .unwrap_or(0) as isize;
+        let max = self.filtered_history_indices.len().saturating_sub(1) as isize;
+        let next_position = (current_position + delta).clamp(0, max) as usize;
+        self.selected_history = self.filtered_history_indices[next_position];
+    }
+
     fn load_selected_history_to_composer(&mut self) {
-        let index = match self.selected_history() {
+        let index = match self.selected_history_for_current_list() {
             Some(v) => v,
             None => return,
         };
@@ -809,6 +951,7 @@ impl ChatWidget {
                 cell.memo_version = Some(memo.version.clone());
             }
             self.selected_history = position;
+            self.maybe_recompute_memo_list_filter();
             return;
         }
 
@@ -818,6 +961,7 @@ impl ChatWidget {
             memo.id.clone(),
             memo.version.clone(),
         );
+        self.maybe_recompute_memo_list_filter();
     }
 
     fn reset_composer_state(&mut self) {
@@ -836,6 +980,7 @@ impl ChatWidget {
     fn return_to_composer_insert_mode(&mut self) {
         self.page_mode = PageMode::Composer;
         self.focus = FocusArea::Composer;
+        self.memo_list_search_mode = false;
         self.bottom_pane.composer_mut().switch_to_insert_mode();
     }
 
@@ -860,6 +1005,83 @@ impl ChatWidget {
 
     fn refresh_composer_dirty_state(&mut self) {
         self.composer_dirty = self.bottom_pane.composer().text() != self.clean_composer_text;
+    }
+
+    fn clear_memo_list_filter(&mut self) {
+        self.memo_list_query.clear();
+        self.filtered_history_indices.clear();
+    }
+
+    fn maybe_recompute_memo_list_filter(&mut self) {
+        if self.memo_list_filter_active() {
+            self.recompute_memo_list_filter();
+        }
+    }
+
+    fn recompute_memo_list_filter(&mut self) {
+        let selected_before = self.selected_history();
+        if self.memo_list_query.is_empty() {
+            self.filtered_history_indices = (0..self.history.len()).collect();
+        } else {
+            let query = self.memo_list_query.to_lowercase();
+            self.filtered_history_indices = self
+                .history
+                .iter()
+                .enumerate()
+                .filter_map(|(index, cell)| {
+                    if cell.full_text.to_lowercase().contains(&query) {
+                        Some(index)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+
+        let Some(selected_before) = selected_before else {
+            return;
+        };
+        if self
+            .filtered_history_indices
+            .iter()
+            .any(|index| *index == selected_before)
+        {
+            return;
+        }
+        if let Some(first) = self.filtered_history_indices.first() {
+            self.selected_history = *first;
+        }
+    }
+
+    fn memo_list_filter_active(&self) -> bool {
+        self.memo_list_search_mode || !self.memo_list_query.is_empty()
+    }
+
+    fn selected_history_for_current_list(&self) -> Option<usize> {
+        if self.page_mode == PageMode::MemoList {
+            return self.selected_history_index_for_memo_list();
+        }
+        self.selected_history()
+    }
+
+    fn selected_history_index_for_memo_list(&self) -> Option<usize> {
+        if !self.memo_list_filter_active() {
+            return self.selected_history();
+        }
+        if self.filtered_history_indices.is_empty() {
+            return None;
+        }
+
+        let selected = self.selected_history();
+        if let Some(selected) = selected
+            && self
+                .filtered_history_indices
+                .iter()
+                .any(|index| *index == selected)
+        {
+            return Some(selected);
+        }
+        self.filtered_history_indices.first().copied()
     }
 }
 
@@ -1313,6 +1535,196 @@ mod tests {
     }
 
     #[test]
+    fn y_in_memo_list_emits_copy_selected_memo() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![memo("memo-1", "memo-1", "1")]);
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        let action = widget.handle_key_event(key(KeyCode::Char('y')));
+
+        assert_eq!(action, WidgetAction::CopySelectedMemo);
+    }
+
+    #[test]
+    fn slash_enters_memo_list_search_mode() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![
+            memo("memo-1", "memo-1", "1"),
+            memo("memo-2", "memo-2", "1"),
+        ]);
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        widget.handle_key_event(key(KeyCode::Char('/')));
+
+        assert!(widget.memo_list_search_mode());
+        assert_eq!(widget.memo_list_query(), "");
+        assert_eq!(
+            widget.memo_list_visible_indices().len(),
+            widget.history().len()
+        );
+    }
+
+    #[test]
+    fn memo_list_search_filters_case_insensitive_and_enter_keeps_filter() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![
+            memo("memo-1", "Alpha", "1"),
+            memo("memo-2", "beta", "1"),
+        ]);
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        widget.handle_key_event(key(KeyCode::Char('/')));
+        type_text(&mut widget, "ALP");
+
+        assert_eq!(widget.memo_list_visible_indices().len(), 1);
+        assert_eq!(
+            widget
+                .memo_list_selected_cell()
+                .map(|cell| cell.full_text.as_str()),
+            Some("Alpha")
+        );
+
+        widget.handle_key_event(key(KeyCode::Enter));
+
+        assert!(!widget.memo_list_search_mode());
+        assert_eq!(widget.memo_list_query(), "ALP");
+        assert_eq!(widget.memo_list_visible_indices().len(), 1);
+    }
+
+    #[test]
+    fn memo_list_search_backspace_and_esc_update_and_clear_filter() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![
+            memo("memo-1", "dog", "1"),
+            memo("memo-2", "dot", "1"),
+            memo("memo-3", "cat", "1"),
+        ]);
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        widget.handle_key_event(key(KeyCode::Char('/')));
+        type_text(&mut widget, "dog");
+        assert_eq!(widget.memo_list_visible_indices().len(), 1);
+
+        widget.handle_key_event(key(KeyCode::Backspace));
+        assert_eq!(widget.memo_list_query(), "do");
+        assert_eq!(widget.memo_list_visible_indices().len(), 2);
+
+        widget.handle_key_event(key(KeyCode::Esc));
+        assert!(!widget.memo_list_search_mode());
+        assert_eq!(widget.memo_list_query(), "");
+        assert_eq!(
+            widget.memo_list_visible_indices().len(),
+            widget.history().len()
+        );
+    }
+
+    #[test]
+    fn memo_list_enter_loads_selected_from_active_filter() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![
+            memo("memo-1", "dog", "1"),
+            memo("memo-2", "cat", "1"),
+        ]);
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        widget.handle_key_event(key(KeyCode::Char('/')));
+        type_text(&mut widget, "dog");
+        widget.handle_key_event(key(KeyCode::Enter));
+
+        let action = widget.handle_key_event(key(KeyCode::Enter));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.page_mode(), PageMode::Composer);
+        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "dog");
+    }
+
+    #[test]
+    fn memo_list_search_no_match_has_no_selected_cell() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![memo("memo-1", "dog", "1")]);
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        widget.handle_key_event(key(KeyCode::Char('/')));
+        type_text(&mut widget, "zzz");
+
+        assert!(widget.memo_list_selected_cell().is_none());
+        assert_eq!(widget.selected_memo_text(), None);
+    }
+
+    #[test]
+    fn refresh_history_reapplies_active_memo_list_filter() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(vec![
+            memo("memo-1", "dog", "1"),
+            memo("memo-2", "cat", "1"),
+        ]);
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        widget.handle_key_event(key(KeyCode::Char('/')));
+        type_text(&mut widget, "dog");
+        widget.handle_key_event(key(KeyCode::Enter));
+        assert_eq!(widget.memo_list_visible_indices().len(), 1);
+
+        widget.refresh_history_from_memos(vec![
+            memo("memo-1", "dog updated", "2"),
+            memo("memo-3", "bird", "1"),
+        ]);
+
+        assert_eq!(widget.memo_list_query(), "dog");
+        assert_eq!(widget.memo_list_visible_indices().len(), 1);
+        assert_eq!(
+            widget
+                .memo_list_selected_cell()
+                .map(|cell| cell.full_text.as_str()),
+            Some("dog updated")
+        );
+    }
+
+    #[test]
+    fn ctrl_f_and_ctrl_b_in_memo_list_page_by_ten_rows() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(seed_memos(30));
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        for _ in 0..29 {
+            widget.handle_key_event(key(KeyCode::Up));
+        }
+        assert_eq!(widget.selected_history(), Some(0));
+
+        widget.handle_key_event(ctrl(KeyCode::Char('f')));
+        assert_eq!(widget.selected_history(), Some(10));
+
+        widget.handle_key_event(ctrl(KeyCode::Char('b')));
+        assert_eq!(widget.selected_history(), Some(0));
+    }
+
+    #[test]
+    fn pageup_and_pagedown_in_memo_list_page_by_ten_rows() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(seed_memos(30));
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        for _ in 0..29 {
+            widget.handle_key_event(key(KeyCode::Up));
+        }
+        assert_eq!(widget.selected_history(), Some(0));
+
+        widget.handle_key_event(key(KeyCode::PageDown));
+        assert_eq!(widget.selected_history(), Some(10));
+
+        widget.handle_key_event(key(KeyCode::PageUp));
+        assert_eq!(widget.selected_history(), Some(0));
+    }
+
+    #[test]
     fn d_in_memo_list_starts_confirmation_and_enter_confirms_delete() {
         let mut widget = ChatWidget::new();
         widget.hydrate_history_from_memos(vec![memo("memo-1", "memo-1", "1")]);
@@ -1415,6 +1827,18 @@ mod tests {
         }
     }
 
+    fn seed_memos(count: usize) -> Vec<RecentMemo> {
+        (0..count)
+            .map(|idx| RecentMemo {
+                id: format!("memo-{idx}"),
+                text: format!("memo-{idx}"),
+                created_at: "2026-02-23T01:00:00Z".to_string(),
+                version: "1".to_string(),
+                deleted_at: None,
+            })
+            .collect()
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
@@ -1434,5 +1858,11 @@ mod tests {
     fn open_split_list(widget: &mut ChatWidget) {
         widget.handle_key_event(key(KeyCode::Esc));
         widget.handle_key_event(key(KeyCode::Char('p')));
+    }
+
+    fn type_text(widget: &mut ChatWidget, text: &str) {
+        for c in text.chars() {
+            widget.handle_key_event(key(KeyCode::Char(c)));
+        }
     }
 }
