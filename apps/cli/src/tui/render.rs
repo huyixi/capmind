@@ -17,7 +17,6 @@ const COMPOSER_PLACEHOLDER: &str = "What's on your mind?";
 const COMPOSER_EDIT_PLACEHOLDER: &str = "Editing selected memo...";
 const COMPOSER_QUIT_CONFIRM_PLACEHOLDER: &str = "Press Esc again to quit";
 const IMAGE_ONLY_MEMO_PLACEHOLDER: &str = "[Image-only memo]";
-const MEMO_LIST_LOADING_FOOTER: &str = "Loading memos...";
 
 pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget) {
     let area = frame.area();

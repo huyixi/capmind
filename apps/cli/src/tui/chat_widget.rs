@@ -1051,11 +1051,7 @@ impl ChatWidget {
         let Some(selected_before) = selected_before else {
             return;
         };
-        if self
-            .filtered_history_indices
-            .iter()
-            .any(|index| *index == selected_before)
-        {
+        if self.filtered_history_indices.contains(&selected_before) {
             return;
         }
         if let Some(first) = self.filtered_history_indices.first() {
@@ -1084,10 +1080,7 @@ impl ChatWidget {
 
         let selected = self.selected_history();
         if let Some(selected) = selected
-            && self
-                .filtered_history_indices
-                .iter()
-                .any(|index| *index == selected)
+            && self.filtered_history_indices.contains(&selected)
         {
             return Some(selected);
         }

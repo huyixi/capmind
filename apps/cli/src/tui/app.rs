@@ -518,10 +518,10 @@ fn wq_retry_delay(attempt: usize) -> Duration {
 fn copy_to_clipboard(text: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        return copy_with_command("pbcopy", &[], text).map_err(|err| match err {
+        copy_with_command("pbcopy", &[], text).map_err(|err| match err {
             CopyCommandError::NotFound => "`pbcopy` not found.".to_string(),
             CopyCommandError::Failed(message) => message,
-        });
+        })
     }
 
     #[cfg(target_os = "windows")]
