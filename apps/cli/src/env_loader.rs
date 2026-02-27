@@ -9,6 +9,7 @@ pub fn init() {
     let _ = FILE_ENV.get_or_init(load_file_env);
 }
 
+#[allow(dead_code)]
 pub fn get_value(keys: &[&str]) -> Option<String> {
     for key in keys {
         if let Ok(value) = std::env::var(key) {

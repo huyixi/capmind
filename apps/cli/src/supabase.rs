@@ -4,10 +4,12 @@ use chrono::{DateTime, Duration, Utc};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use crate::env_loader;
 use crate::error::AppError;
 
 const MEMO_LIST_PAGE_SIZE: usize = 200;
+const DEFAULT_SUPABASE_URL: &str = "https://fpeudcmnzirzjjjqtjep.supabase.co";
+const DEFAULT_SUPABASE_ANON_KEY: &str = "sb_publishable_m_5H3rQuAMJg2HhL-bWOJQ_MCGlZ4Vv";
+const NETWORK_RETRY_DELAYS_MS: [u64; 2] = [250, 1000];
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -132,28 +134,14 @@ struct MemoResolveConflictRpcResponse {
 
 impl SupabaseClient {
     pub fn from_env() -> Result<Self, AppError> {
-        let base_url = env_loader::get_value(&["SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL"])
-            .ok_or_else(|| {
-                AppError::MissingEnv(
-                    "Missing env: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)".to_string(),
-                )
-            })?;
-        let anon_key =
-            env_loader::get_value(&["SUPABASE_ANON_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY"])
-                .ok_or_else(|| {
-                    AppError::MissingEnv(
-                        "Missing env: SUPABASE_ANON_KEY (or NEXT_PUBLIC_SUPABASE_ANON_KEY)"
-                            .to_string(),
-                    )
-                })?;
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(20))
             .build()
             .map_err(|err| AppError::Network(format!("Failed to build HTTP client: {err}")))?;
 
         Ok(Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
-            anon_key,
+            base_url: DEFAULT_SUPABASE_URL.trim_end_matches('/').to_string(),
+            anon_key: DEFAULT_SUPABASE_ANON_KEY.to_string(),
             http,
         })
     }
@@ -164,14 +152,14 @@ impl SupabaseClient {
         password: &str,
     ) -> Result<Session, AppError> {
         let endpoint = format!("{}/auth/v1/token?grant_type=password", self.base_url);
-        let response = self
-            .http
-            .post(endpoint)
-            .header("apikey", &self.anon_key)
-            .json(&serde_json::json!({ "email": email, "password": password }))
-            .send()
-            .await
-            .map_err(|err| AppError::Network(format!("Supabase auth request failed: {err}")))?;
+        let response = send_with_network_retry(
+            self.http
+                .post(endpoint)
+                .header("apikey", &self.anon_key)
+                .json(&serde_json::json!({ "email": email, "password": password })),
+            "Supabase auth request failed",
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -190,14 +178,14 @@ impl SupabaseClient {
 
     pub async fn refresh_session(&self, refresh_token: &str) -> Result<Session, AppError> {
         let endpoint = format!("{}/auth/v1/token?grant_type=refresh_token", self.base_url);
-        let response = self
-            .http
-            .post(endpoint)
-            .header("apikey", &self.anon_key)
-            .json(&serde_json::json!({ "refresh_token": refresh_token }))
-            .send()
-            .await
-            .map_err(|err| AppError::Network(format!("Supabase refresh request failed: {err}")))?;
+        let response = send_with_network_retry(
+            self.http
+                .post(endpoint)
+                .header("apikey", &self.anon_key)
+                .json(&serde_json::json!({ "refresh_token": refresh_token })),
+            "Supabase refresh request failed",
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -226,16 +214,16 @@ impl SupabaseClient {
             text,
         };
 
-        let response = self
-            .http
-            .post(endpoint)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {access_token}"))
-            .header("Prefer", "return=representation")
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|err| AppError::Network(format!("Supabase insert request failed: {err}")))?;
+        let response = send_with_network_retry(
+            self.http
+                .post(endpoint)
+                .header("apikey", &self.anon_key)
+                .header("Authorization", format!("Bearer {access_token}"))
+                .header("Prefer", "return=representation")
+                .json(&payload),
+            "Supabase insert request failed",
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -296,14 +284,14 @@ impl SupabaseClient {
             "{}/rest/v1/memos?select=id,text,created_at,version,deleted_at&deleted_at=is.null&order=updated_at.desc&limit={limit}&offset={offset}",
             self.base_url
         );
-        let response = self
-            .http
-            .get(endpoint)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {access_token}"))
-            .send()
-            .await
-            .map_err(|err| AppError::Network(format!("Supabase list request failed: {err}")))?;
+        let response = send_with_network_retry(
+            self.http
+                .get(endpoint)
+                .header("apikey", &self.anon_key)
+                .header("Authorization", format!("Bearer {access_token}")),
+            "Supabase list request failed",
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -342,14 +330,14 @@ impl SupabaseClient {
             "{}/rest/v1/memos?select=id,text,created_at,version,deleted_at&id=eq.{memo_id}&limit=1",
             self.base_url
         );
-        let response = self
-            .http
-            .get(endpoint)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {access_token}"))
-            .send()
-            .await
-            .map_err(|err| AppError::Network(format!("Supabase get request failed: {err}")))?;
+        let response = send_with_network_retry(
+            self.http
+                .get(endpoint)
+                .header("apikey", &self.anon_key)
+                .header("Authorization", format!("Bearer {access_token}")),
+            "Supabase get request failed",
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -385,17 +373,15 @@ impl SupabaseClient {
             arg_text: text,
             arg_expected_version: expected_version,
         };
-        let response = self
-            .http
-            .post(endpoint)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {access_token}"))
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|err| {
-                AppError::Network(format!("Supabase update RPC request failed: {err}"))
-            })?;
+        let response = send_with_network_retry(
+            self.http
+                .post(endpoint)
+                .header("apikey", &self.anon_key)
+                .header("Authorization", format!("Bearer {access_token}"))
+                .json(&payload),
+            "Supabase update RPC request failed",
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -477,17 +463,15 @@ impl SupabaseClient {
             arg_deleted_at: &deleted_at,
         };
         let endpoint = format!("{}/rest/v1/rpc/memo_delete_resolve_conflict", self.base_url);
-        let response = self
-            .http
-            .post(endpoint)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {access_token}"))
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|err| {
-                AppError::Network(format!("Supabase delete RPC request failed: {err}"))
-            })?;
+        let response = send_with_network_retry(
+            self.http
+                .post(endpoint)
+                .header("apikey", &self.anon_key)
+                .header("Authorization", format!("Bearer {access_token}"))
+                .json(&payload),
+            "Supabase delete RPC request failed",
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -548,17 +532,15 @@ impl SupabaseClient {
             "{}/rest/v1/rpc/memo_restore_resolve_conflict",
             self.base_url
         );
-        let response = self
-            .http
-            .post(endpoint)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {access_token}"))
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|err| {
-                AppError::Network(format!("Supabase restore RPC request failed: {err}"))
-            })?;
+        let response = send_with_network_retry(
+            self.http
+                .post(endpoint)
+                .header("apikey", &self.anon_key)
+                .header("Authorization", format!("Bearer {access_token}"))
+                .json(&payload),
+            "Supabase restore RPC request failed",
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -631,6 +613,36 @@ async fn read_error_body(response: reqwest::Response) -> String {
     }
 }
 
+async fn send_with_network_retry(
+    request: reqwest::RequestBuilder,
+    context: &str,
+) -> Result<reqwest::Response, AppError> {
+    let attempts = NETWORK_RETRY_DELAYS_MS.len() + 1;
+    let mut last_error: Option<reqwest::Error> = None;
+
+    for attempt in 0..attempts {
+        let cloned = request.try_clone().ok_or_else(|| {
+            AppError::Network(format!(
+                "{context}: failed to clone request for retry"
+            ))
+        })?;
+        match cloned.send().await {
+            Ok(response) => return Ok(response),
+            Err(err) => {
+                last_error = Some(err);
+                if let Some(delay_ms) = NETWORK_RETRY_DELAYS_MS.get(attempt) {
+                    tokio::time::sleep(std::time::Duration::from_millis(*delay_ms)).await;
+                }
+            }
+        }
+    }
+
+    let err = last_error.expect("request attempts should produce an error");
+    Err(AppError::Network(format!(
+        "{context} after {attempts} attempts: {err}"
+    )))
+}
+
 fn extract_user_id_from_jwt(access_token: &str) -> Result<String, AppError> {
     let mut parts = access_token.split('.');
     let _header = parts
@@ -687,7 +699,10 @@ fn normalize_version_value(value: &serde_json::Value) -> Result<String, AppError
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_user_id_from_jwt, should_fetch_next_page};
+    use super::{
+        DEFAULT_SUPABASE_ANON_KEY, DEFAULT_SUPABASE_URL, SupabaseClient, extract_user_id_from_jwt,
+        should_fetch_next_page,
+    };
 
     #[test]
     fn extract_sub_from_jwt_payload() {
@@ -709,5 +724,12 @@ mod tests {
     #[test]
     fn should_not_fetch_next_page_with_zero_page_size() {
         assert!(!should_fetch_next_page(10, 0));
+    }
+
+    #[test]
+    fn from_env_uses_built_in_defaults() {
+        let client = SupabaseClient::from_env().expect("client should build");
+        assert_eq!(client.base_url, DEFAULT_SUPABASE_URL);
+        assert_eq!(client.anon_key, DEFAULT_SUPABASE_ANON_KEY);
     }
 }
