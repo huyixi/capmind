@@ -148,6 +148,10 @@ fn memo_list_footer_text(
     if let Some(status) = status_message {
         return status.to_string();
     }
+    if let Some(selected_time) = selected_memo_time {
+        return selected_time.to_string();
+    }
+    String::new()
 }
 
 fn format_memo_list_row(memo: &str, total_width: usize) -> String {

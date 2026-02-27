@@ -366,18 +366,6 @@ impl<'a> ComposeApp<'a> {
         }
     }
 
-    fn handle_copy_selected_memo(&mut self) {
-        let Some(text) = self.widget.selected_memo_text().map(ToString::to_string) else {
-            self.widget.on_copy_error("No memo selected.");
-            return;
-        };
-
-        match copy_to_clipboard(&text) {
-            Ok(()) => self.widget.on_copy_success(),
-            Err(err) => self.widget.on_copy_error(&err),
-        }
-    }
-
     fn start_submit_create_submission(
         &self,
         tx: UnboundedSender<BackgroundEvent>,
