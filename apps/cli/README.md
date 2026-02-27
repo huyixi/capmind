@@ -5,32 +5,11 @@ Rust CLI to insert memo text into the existing Supabase `memos` table used by `m
 ## Requirements
 
 - Rust 1.80+ (tested with `rustc 1.93.1`)
-- Supabase project values:
-  - `SUPABASE_URL` (or `NEXT_PUBLIC_SUPABASE_URL`)
-  - `SUPABASE_ANON_KEY` (or `NEXT_PUBLIC_SUPABASE_ANON_KEY`)
 - A valid user account for email/password sign-in
 
 ## Setup
 
-```bash
-cp .env.example .env
-```
-
-Set environment variables in your shell:
-
-```bash
-export SUPABASE_URL="https://YOUR_PROJECT.supabase.co"
-export SUPABASE_ANON_KEY="YOUR_ANON_KEY"
-```
-
-The CLI auto-loads env files in this order (first found values are used):
-
-1. `../../.env.local` (monorepo root)
-2. `../../.env` (monorepo root)
-3. `./.env.local`
-4. `./.env`
-5. `~/.capmind/.env.local`
-6. `~/.capmind/.env`
+No env setup is required. The CLI ships with built-in Supabase URL and anon key.
 
 ## Usage
 
@@ -146,15 +125,15 @@ replacement fails.
 
 ## Error handling
 
-- Exit code `2`: invalid input or missing env
+- Exit code `2`: invalid input
 - Exit code `3`: auth failure
 - Exit code `4`: Supabase API failure (RLS / insert errors)
 - Exit code `5`: network failure
 
 ## Common troubleshooting
 
-- `Missing env: SUPABASE_URL` / `SUPABASE_ANON_KEY`:
-  - Set them in one of the auto-loaded env files above, or export in shell.
+- `Supabase ... request failed after 3 attempts`:
+  - Check internet connection and whether `https://fpeudcmnzirzjjjqtjep.supabase.co` is reachable.
 - `Supabase auth failed`:
   - Verify email/password sign-in is enabled in Supabase Auth settings.
 - `No saved token found`:
