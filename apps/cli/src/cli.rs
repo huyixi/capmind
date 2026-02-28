@@ -14,6 +14,7 @@ pub struct Cli {
 pub enum Commands {
     Add(AddArgs),
     Login,
+    Logout,
     Compose,
     List,
     #[command(name = "update", alias = "self-update")]
@@ -54,7 +55,7 @@ where
     }
     if matches!(
         first,
-        "add" | "login" | "help" | "compose" | "list" | "update" | "self-update"
+        "add" | "login" | "logout" | "help" | "compose" | "list" | "update" | "self-update"
     ) {
         return argv;
     }
@@ -101,12 +102,12 @@ pub fn resolve_text(input: Option<String>) -> Result<String, AppError> {
 
 pub fn prompt_email() -> Result<String, AppError> {
     ensure_interactive()?;
-    prompt("Supabase email: ")
+    prompt("Email: ")
 }
 
 pub fn prompt_password() -> Result<String, AppError> {
     ensure_interactive()?;
-    rpassword::prompt_password("Supabase password: ")
+    rpassword::prompt_password("Password: ")
         .map_err(|err| AppError::InvalidInput(format!("Failed reading password input: {err}")))
 }
 
@@ -164,6 +165,13 @@ mod tests {
         let input = vec!["cap".to_string(), "login".to_string()];
         let output = rewrite_shortcut_args(input);
         assert_eq!(output, vec!["cap", "login"]);
+    }
+
+    #[test]
+    fn does_not_rewrite_logout_subcommand() {
+        let input = vec!["cap".to_string(), "logout".to_string()];
+        let output = rewrite_shortcut_args(input);
+        assert_eq!(output, vec!["cap", "logout"]);
     }
 
     #[test]

@@ -10,8 +10,9 @@ mod tui;
 
 use clap::Parser;
 use cli::{Cli, Commands, resolve_text, rewrite_shortcut_args};
+use std::io::{self, IsTerminal};
 
-use crate::auth::login_interactive;
+use crate::auth::{authenticate_with_stored_token, login_interactive, logout};
 use crate::self_update::{SelfUpdateOutcome, run_self_update};
 use crate::submission::submit_memo;
 use crate::supabase::SupabaseClient;
@@ -38,6 +39,14 @@ async fn run() -> Result<(), error::AppError> {
                 session.expires_at
             );
         }
+        Commands::Logout => {
+            let removed = logout()?;
+            if removed {
+                println!("Logout successful\nstorage: ~/.capmind/auth.json");
+            } else {
+                println!("Already logged out");
+            }
+        }
         Commands::Add(args) => {
             let client = SupabaseClient::from_env()?;
             let text = resolve_text(args.text.clone())?;
@@ -49,10 +58,12 @@ async fn run() -> Result<(), error::AppError> {
         }
         Commands::Compose => {
             let client = SupabaseClient::from_env()?;
+            ensure_logged_in_or_prompt(&client).await?;
             tui::run(&client).await?;
         }
         Commands::List => {
             let client = SupabaseClient::from_env()?;
+            ensure_logged_in_or_prompt(&client).await?;
             tui::run_list(&client).await?;
         }
         Commands::Update(args) => match run_self_update(args.version.as_deref()).await? {
@@ -71,5 +82,29 @@ async fn run() -> Result<(), error::AppError> {
         },
     }
 
+    Ok(())
+}
+
+async fn ensure_logged_in_or_prompt(client: &SupabaseClient) -> Result<(), error::AppError> {
+    if authenticate_with_stored_token(client).await.is_ok() {
+        return Ok(());
+    }
+
+    if !io::stdin().is_terminal() {
+        return Err(error::AppError::Auth(
+            "You are not logged in. Run `cap login`.".to_string(),
+        ));
+    }
+
+    println!("You are not logged in.");
+    println!("Press Enter to login now (Ctrl+C to cancel).");
+
+    let mut line = String::new();
+    io::stdin().read_line(&mut line).map_err(|err| {
+        error::AppError::InvalidInput(format!("Failed reading login confirmation: {err}"))
+    })?;
+
+    let _ = login_interactive(client).await?;
+    println!("Login successful.");
     Ok(())
 }

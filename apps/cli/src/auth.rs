@@ -1,6 +1,6 @@
 use crate::cli::{prompt_email, prompt_password};
 use crate::error::AppError;
-use crate::session_store::{load_refresh_token, save_refresh_token};
+use crate::session_store::{clear_saved_session, load_refresh_token, save_refresh_token};
 use crate::supabase::{Session, SupabaseClient};
 
 pub async fn authenticate_with_stored_token(client: &SupabaseClient) -> Result<Session, AppError> {
@@ -12,16 +12,16 @@ pub async fn authenticate_with_stored_token(client: &SupabaseClient) -> Result<S
                 }
                 Ok(session)
             }
-            Err(err) => Err(AppError::Auth(format!(
-                "Saved token is invalid ({err}). Run `cap login` to re-authenticate."
-            ))),
+            Err(_) => Err(AppError::Auth(
+                "You are not logged in. Run `cap login`.".to_string(),
+            )),
         },
         Ok(None) => Err(AppError::Auth(
-            "No saved token found. Run `cap login` first.".to_string(),
+            "You are not logged in. Run `cap login`.".to_string(),
         )),
-        Err(err) => Err(AppError::Auth(format!(
-            "Failed to load saved token ({err}). Run `cap login`."
-        ))),
+        Err(_) => Err(AppError::Auth(
+            "You are not logged in. Run `cap login`.".to_string(),
+        )),
     }
 }
 
@@ -33,4 +33,9 @@ pub async fn login_interactive(client: &SupabaseClient) -> Result<Session, AppEr
         eprintln!("Warning: failed to persist session token to ~/.capmind/auth.json: {err}");
     }
     Ok(session)
+}
+
+pub fn logout() -> Result<bool, AppError> {
+    clear_saved_session()
+        .map_err(|err| AppError::Auth(format!("Failed to clear saved session: {err}")))
 }

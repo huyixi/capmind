@@ -60,6 +60,16 @@ pub fn save_refresh_token(refresh_token: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn clear_saved_session() -> Result<bool, String> {
+    let path = session_file_path()?;
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    fs::remove_file(&path).map_err(|err| format!("Failed to remove {}: {err}", display(&path)))?;
+    Ok(true)
+}
+
 fn session_file_path() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME env var is not set".to_string())?;
     Ok(PathBuf::from(home)

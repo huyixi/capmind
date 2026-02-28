@@ -72,13 +72,24 @@ If `W` fails after the final retry, the UI prompts to either quit without submit
 cargo run -- login
 ```
 
-### 3) Text via `--text`
+Login prompts are:
+
+- `Email:`
+- `Password:`
+
+### 3) Logout
+
+```bash
+cargo run -- logout
+```
+
+### 4) Text via `--text`
 
 ```bash
 cargo run -- add --text "hello from rust cli"
 ```
 
-### 4) Quick shortcut
+### 5) Quick shortcut
 
 ```bash
 cargo run -- "hello from shortcut"
@@ -92,13 +103,13 @@ cargo run -- add --text "hello from shortcut"
 
 Shortcut scope is intentionally narrow: only a single positional text argument is rewritten.
 
-### 5) Text via stdin
+### 6) Text via stdin
 
 ```bash
 echo "hello from stdin" | cargo run -- add
 ```
 
-### 6) Update with checksum verification
+### 7) Update with checksum verification
 
 Update to latest release:
 
@@ -120,6 +131,7 @@ replacement fails.
 
 - CLI first attempts refresh-token login from `~/.capmind/auth.json`.
 - If refresh fails or missing, CLI asks you to run `cap login`.
+- `cap compose`/`cap list`: if not logged in, CLI prompts `Press Enter to login now`.
 - Successful login stores refresh token to `~/.capmind/auth.json` (field: `refresh_token`).
 - Email/password are only entered interactively in `cap login`.
 
@@ -136,7 +148,8 @@ replacement fails.
   - Check internet connection and whether `https://fpeudcmnzirzjjjqtjep.supabase.co` is reachable.
 - `Supabase auth failed`:
   - Verify email/password sign-in is enabled in Supabase Auth settings.
-- `No saved token found`:
+  - Login uses your account email and password (not access/refresh tokens).
+- `You are not logged in`:
   - Run `cargo run -- login` once.
 - `Insert memo failed (401/403...)`:
   - Check RLS policy for `memos` and ensure `user_id` matches `auth.uid()`.
