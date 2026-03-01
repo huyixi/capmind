@@ -35,14 +35,14 @@ TUI keys:
 - Composer vim mode: starts in `INSERT`, `Esc` switches to `NORMAL`
 - `Esc` in `NORMAL` (or outside Composer insert mode): press twice to quit TUI (with confirmation)
 - `NORMAL` mode navigation/edit keys: arrows, `h`/`j`/`k`/`l`, `b`, `0`, `$`, `i`/`a`/`I`/`A`/`o`/`O`, `x`, `dd`
-- `NORMAL` mode direct commands (no `:`):
-  - `w`/`s`: submit and stay
-  - `W`: submit in background (up to 3 attempts, retry delays `1s`, `3s`) and quit on success
-  - `q`: quit only if no unsaved changes
-  - `Q`: quit without submit
-  - `l`: open full-page memo list
-  - `p`: toggle split composer+history layout
-  - `?`: open help popup (`?` / `Esc` / `q` to close)
+- `NORMAL` mode tmux-style commands use prefix `Ctrl+b`:
+  - `Ctrl+b w`/`Ctrl+b s`: submit and stay
+  - `Ctrl+b W`: submit in background (up to 3 attempts, retry delays `1s`, `3s`) and quit on success
+  - `Ctrl+b q`: quit only if no unsaved changes
+  - `Ctrl+b Q`: quit without submit
+  - `Ctrl+b l`: open full-page memo list
+  - `Ctrl+b p`: toggle split composer+history layout
+  - `Ctrl+b ?`: open help popup (`?` / `Esc` / `q` to close)
 - `Tab`: switch focus between Composer and History panes (only when split layout is open)
 - `↑` / `k` (in History): move selection up
 - `↓` / `j` (in History): move selection down
@@ -53,10 +53,10 @@ TUI keys:
 - `d` (in History): open delete confirmation for selected memo
 - `Enter` / `y` / `d` (in delete confirmation): confirm delete
 - `n` / `Esc` (in delete confirmation): cancel delete
-- Memo list page: `j`/`k` or `↑`/`↓` move, `Ctrl+f`/`Ctrl+b` (or `PageDown`/`PageUp`) page down/up, `/` enters search, search is case-insensitive contains, `Enter` applies search / loads selected memo (outside search mode), `Esc` clears search (in search mode) or returns to composer page, `y` copies selected memo text, `r` refreshes memo list, `d` opens delete confirmation, `?` opens help popup
+- Memo list page: `j`/`k` or `↑`/`↓` move, `Ctrl+f`/`PageDown` next page, `PageUp` previous page, `Ctrl+b n`/`Ctrl+b p` next/previous page, `/` enters search, search is case-insensitive contains, `Enter` applies search / loads selected memo (outside search mode), `Esc` clears search (in search mode) or returns to composer page, `y` copies selected memo text, `r` refreshes memo list, `d` opens delete confirmation, `Ctrl+b c` returns to composer page, `Ctrl+b q` quits program, `?` opens help popup
 
 Composer page starts in single-pane mode (no history pane shown).
-Use `p` in `NORMAL` mode when you want to show the split composer/history layout.
+Use `Ctrl+b p` in `NORMAL` mode when you want to show the split composer/history layout.
 
 All non-deleted memos are loaded into history in the background after startup (non-blocking).
 Image-only memos are shown as `[Image-only memo]` in list/history views.

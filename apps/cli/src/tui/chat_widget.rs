@@ -12,6 +12,7 @@ use super::types::{FocusArea, HistoryCell};
 
 const SUBMIT_SUCCESS_TIP_DURATION: Duration = Duration::from_secs(1);
 const MEMO_LIST_PAGE_STEP: isize = 10;
+const TMUX_PREFIX_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WidgetAction {
@@ -87,6 +88,8 @@ pub struct ChatWidget {
     wq_failure_prompt: Option<String>,
     clean_composer_text: String,
     composer_dirty: bool,
+    tmux_prefix_pending: bool,
+    tmux_prefix_started_at: Option<Instant>,
 }
 
 impl Default for ChatWidget {
@@ -118,6 +121,8 @@ impl ChatWidget {
             wq_failure_prompt: None,
             clean_composer_text: String::new(),
             composer_dirty: false,
+            tmux_prefix_pending: false,
+            tmux_prefix_started_at: None,
         }
     }
 
@@ -130,21 +135,36 @@ impl ChatWidget {
             return WidgetAction::Quit;
         }
 
+        self.expire_tmux_prefix_if_needed();
+
         if self.wq_failure_prompt.is_some() {
+            self.clear_tmux_prefix();
             return self.handle_wq_failure_prompt_key(key_event);
         }
 
         if self.wq_submission_in_progress {
+            self.clear_tmux_prefix();
             return WidgetAction::None;
         }
 
         if self.help_overlay.is_some() {
+            self.clear_tmux_prefix();
             return self.handle_help_overlay_key(key_event);
         }
 
         if self.pending_delete.is_some() {
+            self.clear_tmux_prefix();
             self.quit_confirmation_pending = false;
             return self.handle_delete_confirmation_key(key_event);
+        }
+
+        if self.tmux_prefix_pending {
+            return self.handle_tmux_prefixed_key(key_event);
+        }
+
+        if is_tmux_prefix_key(key_event) {
+            self.begin_tmux_prefix();
+            return WidgetAction::None;
         }
 
         if self.page_mode == PageMode::MemoList {
@@ -172,10 +192,6 @@ impl ChatWidget {
         }
 
         self.quit_confirmation_pending = false;
-
-        if let Some(action) = self.handle_normal_mode_command_key(key_event) {
-            return action;
-        }
 
         match self.focus {
             FocusArea::History => self.handle_history_key(key_event),
@@ -594,13 +610,6 @@ impl ChatWidget {
                 WidgetAction::None
             }
             KeyCode::Char(c)
-                if key_event.modifiers.contains(KeyModifiers::CONTROL)
-                    && c.eq_ignore_ascii_case(&'b') =>
-            {
-                self.move_memo_list_selection(-MEMO_LIST_PAGE_STEP);
-                WidgetAction::None
-            }
-            KeyCode::Char(c)
                 if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'k') =>
             {
                 self.move_memo_list_selection(-1);
@@ -625,12 +634,6 @@ impl ChatWidget {
             }
             KeyCode::Enter => {
                 self.load_selected_history_to_composer();
-                self.return_to_composer_insert_mode();
-                WidgetAction::None
-            }
-            KeyCode::Char(c)
-                if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'q') =>
-            {
                 self.return_to_composer_insert_mode();
                 WidgetAction::None
             }
@@ -745,20 +748,86 @@ impl ChatWidget {
         WidgetAction::None
     }
 
-    fn handle_normal_mode_command_key(&mut self, key_event: KeyEvent) -> Option<WidgetAction> {
+    fn begin_tmux_prefix(&mut self) {
+        self.tmux_prefix_pending = true;
+        self.tmux_prefix_started_at = Some(Instant::now());
+    }
+
+    fn clear_tmux_prefix(&mut self) {
+        self.tmux_prefix_pending = false;
+        self.tmux_prefix_started_at = None;
+    }
+
+    fn expire_tmux_prefix_if_needed(&mut self) {
+        let Some(started_at) = self.tmux_prefix_started_at else {
+            return;
+        };
+        if Instant::now().saturating_duration_since(started_at) >= TMUX_PREFIX_TIMEOUT {
+            self.clear_tmux_prefix();
+            self.set_status_message("Tmux prefix timed out.".to_string());
+        }
+    }
+
+    fn handle_tmux_prefixed_key(&mut self, key_event: KeyEvent) -> WidgetAction {
+        if is_tmux_prefix_key(key_event) {
+            self.begin_tmux_prefix();
+            return WidgetAction::None;
+        }
+
+        self.clear_tmux_prefix();
+
+        if !is_plain_or_shift(key_event.modifiers) {
+            self.set_status_message("Unknown tmux command.".to_string());
+            return WidgetAction::None;
+        }
+
+        let KeyCode::Char(c) = key_event.code else {
+            self.set_status_message("Unknown tmux command.".to_string());
+            return WidgetAction::None;
+        };
+
+        if let Some(action) = self.execute_composer_normal_command(c) {
+            return action;
+        }
+
+        if self.page_mode == PageMode::MemoList
+            && let Some(action) = self.handle_memo_list_prefixed_command(c)
+        {
+            return action;
+        }
+
+        self.set_status_message("Unknown tmux command.".to_string());
+        WidgetAction::None
+    }
+
+    fn handle_memo_list_prefixed_command(&mut self, c: char) -> Option<WidgetAction> {
+        let action = match c {
+            c if c.eq_ignore_ascii_case(&'q') => WidgetAction::Quit,
+            c if c.eq_ignore_ascii_case(&'c') => {
+                self.return_to_composer_insert_mode();
+                WidgetAction::None
+            }
+            c if c.eq_ignore_ascii_case(&'n') => {
+                self.move_memo_list_selection(MEMO_LIST_PAGE_STEP);
+                WidgetAction::None
+            }
+            c if c.eq_ignore_ascii_case(&'p') => {
+                self.move_memo_list_selection(-MEMO_LIST_PAGE_STEP);
+                WidgetAction::None
+            }
+            _ => return None,
+        };
+
+        Some(action)
+    }
+
+    fn execute_composer_normal_command(&mut self, c: char) -> Option<WidgetAction> {
         if self.focus != FocusArea::Composer {
             return None;
         }
         if self.bottom_pane.composer().vim_mode() != VimMode::Normal {
             return None;
         }
-        if !is_plain_or_shift(key_event.modifiers) {
-            return None;
-        }
-
-        let KeyCode::Char(c) = key_event.code else {
-            return None;
-        };
 
         let action = match c {
             '?' => {
@@ -1105,6 +1174,17 @@ fn is_ctrl_c(key_event: KeyEvent) -> bool {
     )
 }
 
+fn is_tmux_prefix_key(key_event: KeyEvent) -> bool {
+    matches!(
+        key_event,
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers,
+            ..
+        } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'b')
+    )
+}
+
 fn is_quit_key(key_event: KeyEvent) -> bool {
     matches!(
         key_event,
@@ -1133,9 +1213,10 @@ fn is_help_key(key_event: KeyEvent) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatWidget, HelpOverlayContext, PageMode, WidgetAction};
+    use super::{ChatWidget, HelpOverlayContext, PageMode, TMUX_PREFIX_TIMEOUT, WidgetAction};
     use crate::supabase::RecentMemo;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn push_history_keeps_insert_order() {
@@ -1291,27 +1372,27 @@ mod tests {
     }
 
     #[test]
-    fn command_w_submits_in_create_mode() {
+    fn tmux_command_w_submits_in_create_mode() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = widget.handle_key_event(key(KeyCode::Char('w')));
+        let action = tmux_prefix_char(&mut widget, 'w');
         assert_eq!(action, WidgetAction::SubmitCreate("h".to_string()));
     }
 
     #[test]
-    fn command_s_submits_in_create_mode() {
+    fn tmux_command_s_submits_in_create_mode() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = widget.handle_key_event(key(KeyCode::Char('s')));
+        let action = tmux_prefix_char(&mut widget, 's');
         assert_eq!(action, WidgetAction::SubmitCreate("h".to_string()));
     }
 
     #[test]
-    fn command_s_submits_in_edit_mode() {
+    fn tmux_command_s_submits_in_edit_mode() {
         let mut widget = ChatWidget::new();
         widget.hydrate_history_from_memos(vec![memo("memo-1", "memo-1", "7")]);
         open_split_list(&mut widget);
@@ -1319,7 +1400,7 @@ mod tests {
         widget.handle_key_event(key(KeyCode::Enter));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = widget.handle_key_event(key(KeyCode::Char('s')));
+        let action = tmux_prefix_char(&mut widget, 's');
         assert_eq!(
             action,
             WidgetAction::SubmitEdit {
@@ -1348,7 +1429,7 @@ mod tests {
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = widget.handle_key_event(key(KeyCode::Char('q')));
+        let action = tmux_prefix_char(&mut widget, 'q');
 
         assert_eq!(action, WidgetAction::None);
         assert_eq!(
@@ -1363,13 +1444,13 @@ mod tests {
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = widget.handle_key_event(shift_char('Q'));
+        let action = tmux_prefix_shift_char(&mut widget, 'Q');
 
         assert_eq!(action, WidgetAction::Quit);
     }
 
     #[test]
-    fn command_list_opens_list_page_and_enter_loads() {
+    fn tmux_command_list_opens_list_page_and_enter_loads() {
         let mut widget = ChatWidget::new();
         widget.hydrate_history_from_memos(vec![
             memo("memo-2", "memo-2", "2"),
@@ -1377,7 +1458,7 @@ mod tests {
         ]);
         widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = widget.handle_key_event(key(KeyCode::Char('l')));
+        let action = tmux_prefix_char(&mut widget, 'l');
         assert_eq!(action, WidgetAction::None);
         assert_eq!(widget.page_mode(), PageMode::MemoList);
 
@@ -1406,7 +1487,7 @@ mod tests {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = widget.handle_key_event(key(KeyCode::Char('?')));
+        let action = tmux_prefix_char(&mut widget, '?');
         assert_eq!(action, WidgetAction::None);
         assert_eq!(
             widget.help_overlay(),
@@ -1429,18 +1510,18 @@ mod tests {
     fn help_overlay_closes_on_question_esc_or_q() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Esc));
-        widget.handle_key_event(key(KeyCode::Char('?')));
+        tmux_prefix_char(&mut widget, '?');
         assert!(widget.help_overlay().is_some());
 
         widget.handle_key_event(key(KeyCode::Char('?')));
         assert_eq!(widget.help_overlay(), None);
 
-        widget.handle_key_event(key(KeyCode::Char('?')));
+        tmux_prefix_char(&mut widget, '?');
         assert!(widget.help_overlay().is_some());
         widget.handle_key_event(key(KeyCode::Esc));
         assert_eq!(widget.help_overlay(), None);
 
-        widget.handle_key_event(key(KeyCode::Char('?')));
+        tmux_prefix_char(&mut widget, '?');
         assert!(widget.help_overlay().is_some());
         widget.handle_key_event(key(KeyCode::Char('q')));
         assert_eq!(widget.help_overlay(), None);
@@ -1452,7 +1533,7 @@ mod tests {
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        widget.handle_key_event(key(KeyCode::Char('?')));
+        tmux_prefix_char(&mut widget, '?');
         assert_eq!(
             widget.help_overlay(),
             Some(HelpOverlayContext::ComposerNormal)
@@ -1467,7 +1548,7 @@ mod tests {
         );
 
         widget.handle_key_event(key(KeyCode::Char('?')));
-        let submit = widget.handle_key_event(key(KeyCode::Char('w')));
+        let submit = tmux_prefix_char(&mut widget, 'w');
         assert_eq!(submit, WidgetAction::SubmitCreate("h".to_string()));
     }
 
@@ -1499,7 +1580,7 @@ mod tests {
     }
 
     #[test]
-    fn q_in_memo_list_returns_to_composer_page() {
+    fn q_in_memo_list_is_disabled_without_prefix() {
         let mut widget = ChatWidget::new();
         widget.hydrate_history_from_memos(vec![memo("memo-1", "memo-1", "1")]);
         widget.handle_key_event(key(KeyCode::Esc));
@@ -1509,8 +1590,7 @@ mod tests {
 
         let action = widget.handle_key_event(key(KeyCode::Char('q')));
         assert_eq!(action, WidgetAction::None);
-        assert_eq!(widget.page_mode(), PageMode::Composer);
-        assert!(widget.bottom_pane_mut().composer_mut().is_insert_mode());
+        assert_eq!(widget.page_mode(), PageMode::MemoList);
     }
 
     #[test]
@@ -1702,7 +1782,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_f_and_ctrl_b_in_memo_list_page_by_ten_rows() {
+    fn ctrl_f_and_prefixed_p_in_memo_list_page_by_ten_rows() {
         let mut widget = ChatWidget::new();
         widget.hydrate_history_from_memos(seed_memos(30));
         widget.handle_key_event(key(KeyCode::Esc));
@@ -1716,8 +1796,59 @@ mod tests {
         widget.handle_key_event(ctrl(KeyCode::Char('f')));
         assert_eq!(widget.selected_history(), Some(10));
 
-        widget.handle_key_event(ctrl(KeyCode::Char('b')));
+        tmux_prefix_char(&mut widget, 'p');
         assert_eq!(widget.selected_history(), Some(0));
+    }
+
+    #[test]
+    fn prefixed_n_pages_forward_in_memo_list() {
+        let mut widget = ChatWidget::new();
+        widget.hydrate_history_from_memos(seed_memos(30));
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        for _ in 0..29 {
+            widget.handle_key_event(key(KeyCode::Up));
+        }
+        assert_eq!(widget.selected_history(), Some(0));
+
+        tmux_prefix_char(&mut widget, 'n');
+        assert_eq!(widget.selected_history(), Some(10));
+    }
+
+    #[test]
+    fn prefixed_q_quits_in_memo_list() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        let action = tmux_prefix_char(&mut widget, 'q');
+        assert_eq!(action, WidgetAction::Quit);
+    }
+
+    #[test]
+    fn prefixed_c_returns_to_composer_in_memo_list() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+        assert_eq!(widget.page_mode(), PageMode::MemoList);
+        assert!(!widget.bottom_pane_mut().composer_mut().is_insert_mode());
+
+        let action = tmux_prefix_char(&mut widget, 'c');
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.page_mode(), PageMode::Composer);
+        assert!(widget.bottom_pane_mut().composer_mut().is_insert_mode());
+    }
+
+    #[test]
+    fn plain_c_in_memo_list_is_disabled_without_prefix() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        let action = widget.handle_key_event(key(KeyCode::Char('c')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.page_mode(), PageMode::MemoList);
     }
 
     #[test]
@@ -1761,30 +1892,44 @@ mod tests {
     }
 
     #[test]
-    fn command_splitlist_toggles_split_layout() {
+    fn tmux_command_splitlist_toggles_split_layout() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Esc));
 
-        widget.handle_key_event(key(KeyCode::Char('p')));
+        tmux_prefix_char(&mut widget, 'p');
         assert!(widget.split_list_open());
 
-        widget.handle_key_event(key(KeyCode::Char('p')));
+        tmux_prefix_char(&mut widget, 'p');
         assert!(!widget.split_list_open());
     }
 
     #[test]
-    fn command_shift_w_emits_background_submit_action() {
+    fn tmux_command_shift_w_emits_background_submit_action() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = widget.handle_key_event(shift_char('W'));
+        let action = tmux_prefix_shift_char(&mut widget, 'W');
 
         assert_eq!(
             action,
             WidgetAction::SubmitCreateBeforeQuit("h".to_string())
         );
         assert!(widget.wq_submission_in_progress());
+    }
+
+    #[test]
+    fn tmux_prefix_times_out_and_does_not_run_command() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        widget.handle_key_event(ctrl(KeyCode::Char('b')));
+        widget.tmux_prefix_started_at =
+            Some(Instant::now() - TMUX_PREFIX_TIMEOUT - Duration::from_millis(10));
+
+        let action = widget.handle_key_event(key(KeyCode::Char('l')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.page_mode(), PageMode::Composer);
+        assert_eq!(widget.status_message(), Some("Tmux prefix timed out."));
     }
 
     #[test]
@@ -1867,17 +2012,27 @@ mod tests {
     }
 
     fn open_memo_list(widget: &mut ChatWidget) {
-        widget.handle_key_event(key(KeyCode::Char('l')));
+        tmux_prefix_char(widget, 'l');
     }
 
     fn open_split_list(widget: &mut ChatWidget) {
         widget.handle_key_event(key(KeyCode::Esc));
-        widget.handle_key_event(key(KeyCode::Char('p')));
+        tmux_prefix_char(widget, 'p');
     }
 
     fn type_text(widget: &mut ChatWidget, text: &str) {
         for c in text.chars() {
             widget.handle_key_event(key(KeyCode::Char(c)));
         }
+    }
+
+    fn tmux_prefix_char(widget: &mut ChatWidget, c: char) -> WidgetAction {
+        widget.handle_key_event(ctrl(KeyCode::Char('b')));
+        widget.handle_key_event(key(KeyCode::Char(c)))
+    }
+
+    fn tmux_prefix_shift_char(widget: &mut ChatWidget, c: char) -> WidgetAction {
+        widget.handle_key_event(ctrl(KeyCode::Char('b')));
+        widget.handle_key_event(shift_char(c))
     }
 }

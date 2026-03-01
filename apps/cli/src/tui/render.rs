@@ -448,9 +448,9 @@ fn help_overlay_content(context: HelpOverlayContext) -> &'static str {
     match context {
         HelpOverlayContext::ComposerNormal => {
             "Composer NORMAL\n\
-w/s submit | W submit+quit on success\n\
-q quit if clean | Q force quit\n\
-l open memo list | p toggle split list\n\
+Ctrl+b w/s submit | Ctrl+b W submit+quit on success\n\
+Ctrl+b q quit if clean | Ctrl+b Q force quit\n\
+Ctrl+b l open memo list | Ctrl+b p toggle split list\n\
 h/j/k/l move | b 0 $ | x dd edit\n\
 i/a/I/A/o/O enter insert actions\n\
 ? / Esc / q close help"
@@ -459,14 +459,16 @@ i/a/I/A/o/O enter insert actions\n\
             "Memo List\n\
 j/k or arrows move selection\n\
 Ctrl+f/PageDown next page\n\
-Ctrl+b/PageUp previous page\n\
+PageUp previous page\n\
+Ctrl+b n next page | Ctrl+b p previous page\n\
 / enter search\n\
 Enter apply search | Esc clear search\n\
 Enter open selected memo\n\
 y copy selected memo\n\
 r refresh memo list\n\
 d delete selected memo\n\
-q or Esc return to composer\n\
+Ctrl+b c return to composer\n\
+Ctrl+b q quit program\n\
 ? / Esc / q close help"
         }
     }
@@ -755,8 +757,8 @@ mod tests {
     fn help_overlay_content_is_context_specific() {
         let composer = help_overlay_content(HelpOverlayContext::ComposerNormal);
         assert!(composer.contains("Composer NORMAL"));
-        assert!(composer.contains("w/s submit"));
-        assert!(composer.contains("W submit+quit on success"));
+        assert!(composer.contains("Ctrl+b w/s submit"));
+        assert!(composer.contains("Ctrl+b W submit+quit on success"));
 
         let memo_list = help_overlay_content(HelpOverlayContext::MemoList);
         assert!(memo_list.contains("Memo List"));
@@ -764,7 +766,9 @@ mod tests {
         assert!(memo_list.contains("y copy selected memo"));
         assert!(memo_list.contains("r refresh memo list"));
         assert!(memo_list.contains("Ctrl+f/PageDown next page"));
-        assert!(memo_list.contains("Ctrl+b/PageUp previous page"));
+        assert!(memo_list.contains("Ctrl+b n next page"));
+        assert!(memo_list.contains("Ctrl+b q quit program"));
+        assert!(memo_list.contains("Ctrl+b c return to composer"));
         assert!(memo_list.contains("/ enter search"));
     }
 
