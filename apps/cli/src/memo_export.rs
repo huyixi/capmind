@@ -127,15 +127,15 @@ fn matches_date_range(memo: &RecentMemo, range: &ExportDateRange) -> bool {
     };
     let created_at = created_at.with_timezone(&Utc);
 
-    if let Some(from) = range.from.as_ref() {
-        if created_at < *from {
-            return false;
-        }
+    if let Some(from) = range.from.as_ref()
+        && created_at < *from
+    {
+        return false;
     }
-    if let Some(to) = range.to.as_ref() {
-        if created_at > *to {
-            return false;
-        }
+    if let Some(to) = range.to.as_ref()
+        && created_at > *to
+    {
+        return false;
     }
 
     true

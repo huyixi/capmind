@@ -4,6 +4,7 @@ mod env_loader;
 mod error;
 mod export_selector;
 mod memo_export;
+mod memo_list_cache_store;
 mod self_update;
 mod session_store;
 mod submission;

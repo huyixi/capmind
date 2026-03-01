@@ -57,7 +57,7 @@ fn render(stdout: &mut io::Stdout, state: &SelectorState) -> Result<(), AppError
         .map_err(|err| AppError::InvalidInput(format!("Failed rendering selector: {err}")))?;
     writeln!(stdout, "Select export range")
         .map_err(|err| AppError::InvalidInput(format!("Failed writing selector: {err}")))?;
-    writeln!(stdout, "")
+    writeln!(stdout)
         .map_err(|err| AppError::InvalidInput(format!("Failed writing selector: {err}")))?;
 
     for (idx, (_, label)) in OPTIONS.iter().enumerate() {
@@ -66,7 +66,7 @@ fn render(stdout: &mut io::Stdout, state: &SelectorState) -> Result<(), AppError
             .map_err(|err| AppError::InvalidInput(format!("Failed writing selector: {err}")))?;
     }
 
-    writeln!(stdout, "")
+    writeln!(stdout)
         .map_err(|err| AppError::InvalidInput(format!("Failed writing selector: {err}")))?;
     writeln!(
         stdout,
