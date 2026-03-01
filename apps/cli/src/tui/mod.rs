@@ -2,6 +2,8 @@ mod app;
 mod bottom_pane;
 mod chat_widget;
 mod composer;
+#[path = "../memo_list_cache_store.rs"]
+mod memo_list_cache_store;
 mod render;
 mod types;
 

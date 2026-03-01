@@ -15,7 +15,6 @@ use tokio::time::sleep;
 use crate::auth::authenticate_with_stored_token;
 use crate::cli::resolve_text;
 use crate::error::AppError;
-use crate::memo_list_cache_store::{load_for_user, save_for_user};
 use crate::submission::submit_memo;
 use crate::supabase::{
     DeleteMemoOutcome, InsertedMemo, RecentMemo, SupabaseClient, UpdateMemoOutcome,
@@ -23,6 +22,7 @@ use crate::supabase::{
 };
 
 use super::chat_widget::{ChatWidget, WidgetAction};
+use super::memo_list_cache_store::{load_for_user, save_for_user};
 use super::render;
 
 const WQ_MAX_ATTEMPTS: usize = 3;
