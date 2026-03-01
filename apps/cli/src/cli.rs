@@ -13,6 +13,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     Add(AddArgs),
+    Export,
     Login,
     Logout,
     Compose,
@@ -55,7 +56,15 @@ where
     }
     if matches!(
         first,
-        "add" | "login" | "logout" | "help" | "compose" | "list" | "update" | "self-update"
+        "add"
+            | "export"
+            | "login"
+            | "logout"
+            | "help"
+            | "compose"
+            | "list"
+            | "update"
+            | "self-update"
     ) {
         return argv;
     }
@@ -186,6 +195,13 @@ mod tests {
         let input = vec!["cap".to_string(), "update".to_string()];
         let output = rewrite_shortcut_args(input);
         assert_eq!(output, vec!["cap", "update"]);
+    }
+
+    #[test]
+    fn does_not_rewrite_export_subcommand() {
+        let input = vec!["cap".to_string(), "export".to_string()];
+        let output = rewrite_shortcut_args(input);
+        assert_eq!(output, vec!["cap", "export"]);
     }
 
     #[test]
