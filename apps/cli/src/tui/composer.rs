@@ -320,13 +320,29 @@ impl Composer {
     }
 
     fn insert_newline(&mut self) {
-        let line = &mut self.lines[self.cursor_row];
-        let idx = byte_idx_for_char(line, self.cursor_col);
-        let tail = line[idx..].to_string();
-        line.truncate(idx);
-        self.lines.insert(self.cursor_row + 1, tail);
+        let prefix = {
+            let line = &self.lines[self.cursor_row];
+            next_list_prefix_for_line_cursor(line, self.cursor_col)
+        };
+
+        let tail = {
+            let line = &mut self.lines[self.cursor_row];
+            let idx = byte_idx_for_char(line, self.cursor_col);
+            let tail = line[idx..].to_string();
+            line.truncate(idx);
+            tail
+        };
+
+        let next_line = if let Some(prefix) = prefix {
+            self.cursor_col = line_len_chars(&prefix);
+            format!("{prefix}{tail}")
+        } else {
+            self.cursor_col = 0;
+            tail
+        };
+
+        self.lines.insert(self.cursor_row + 1, next_line);
         self.cursor_row += 1;
-        self.cursor_col = 0;
     }
 
     fn backspace(&mut self) {
@@ -571,6 +587,44 @@ fn display_col_for_char_idx(input: &str, char_idx: usize) -> usize {
     UnicodeWidthStr::width(&input[..byte_idx])
 }
 
+fn next_list_prefix_for_line_cursor(line: &str, cursor_col: usize) -> Option<String> {
+    let cursor_idx = byte_idx_for_char(line, cursor_col);
+    let line_to_cursor = &line[..cursor_idx];
+
+    let indent_end = line_to_cursor
+        .char_indices()
+        .find(|(_, c)| !c.is_whitespace())
+        .map(|(idx, _)| idx)
+        .unwrap_or(line_to_cursor.len());
+    let indent = &line_to_cursor[..indent_end];
+    let remainder = &line_to_cursor[indent_end..];
+
+    if remainder.starts_with('-') {
+        return Some(format!("{indent}- "));
+    }
+
+    let mut digit_count = 0usize;
+    for c in remainder.chars() {
+        if c.is_ascii_digit() {
+            digit_count += 1;
+        } else {
+            break;
+        }
+    }
+
+    if digit_count == 0 {
+        return None;
+    }
+
+    let dot_idx = byte_idx_for_char(remainder, digit_count);
+    if !remainder[dot_idx..].starts_with('.') {
+        return None;
+    }
+
+    let current_order = remainder[..dot_idx].parse::<u64>().ok()?;
+    Some(format!("{indent}{}. ", current_order.saturating_add(1)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Composer, ComposerAction, VimMode, display_col_for_char_idx};
@@ -583,6 +637,36 @@ mod tests {
         composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
         assert_eq!(composer.text(), "a\nb");
+    }
+
+    #[test]
+    fn enter_continues_unordered_list() {
+        let mut composer = Composer::new();
+        composer.set_text("- item");
+        composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(composer.text(), "- item\n- ");
+        assert_eq!(composer.cursor_row(), 1);
+        assert_eq!(composer.cursor_col(), 2);
+    }
+
+    #[test]
+    fn enter_continues_ordered_list() {
+        let mut composer = Composer::new();
+        composer.set_text("  1. item");
+        composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(composer.text(), "  1. item\n  2. ");
+        assert_eq!(composer.cursor_row(), 1);
+        assert_eq!(composer.cursor_col(), 5);
+    }
+
+    #[test]
+    fn enter_does_not_continue_list_when_prefix_not_at_line_start() {
+        let mut composer = Composer::new();
+        composer.set_text("text - item");
+        composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(composer.text(), "text - item\n");
+        assert_eq!(composer.cursor_row(), 1);
+        assert_eq!(composer.cursor_col(), 0);
     }
 
     #[test]
