@@ -25,7 +25,7 @@ pub struct InsertedMemo {
     pub version: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentMemo {
     pub id: String,
     pub text: String,
@@ -207,7 +207,7 @@ impl SupabaseClient {
         access_token: &str,
         text: &str,
     ) -> Result<InsertedMemo, AppError> {
-        let user_id = extract_user_id_from_jwt(access_token)?;
+        let user_id = extract_user_id_from_access_token(access_token)?;
         let endpoint = format!("{}/rest/v1/memos", self.base_url);
         let payload = InsertMemoRequest {
             user_id: &user_id,
@@ -641,7 +641,7 @@ async fn send_with_network_retry(
     )))
 }
 
-fn extract_user_id_from_jwt(access_token: &str) -> Result<String, AppError> {
+pub(crate) fn extract_user_id_from_access_token(access_token: &str) -> Result<String, AppError> {
     let mut parts = access_token.split('.');
     let _header = parts
         .next()
@@ -698,14 +698,14 @@ fn normalize_version_value(value: &serde_json::Value) -> Result<String, AppError
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_SUPABASE_ANON_KEY, DEFAULT_SUPABASE_URL, SupabaseClient, extract_user_id_from_jwt,
-        should_fetch_next_page,
+        DEFAULT_SUPABASE_ANON_KEY, DEFAULT_SUPABASE_URL, SupabaseClient,
+        extract_user_id_from_access_token, should_fetch_next_page,
     };
 
     #[test]
     fn extract_sub_from_jwt_payload() {
         let token = "a.eyJzdWIiOiIxMjM0In0.b";
-        let user_id = extract_user_id_from_jwt(token).expect("should parse sub");
+        let user_id = extract_user_id_from_access_token(token).expect("should parse sub");
         assert_eq!(user_id, "1234");
     }
 

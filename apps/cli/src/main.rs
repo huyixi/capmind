@@ -2,6 +2,7 @@ mod auth;
 mod cli;
 mod env_loader;
 mod error;
+mod memo_list_cache_store;
 mod self_update;
 mod session_store;
 mod submission;

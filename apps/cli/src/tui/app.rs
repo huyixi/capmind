@@ -15,9 +15,11 @@ use tokio::time::sleep;
 use crate::auth::authenticate_with_stored_token;
 use crate::cli::resolve_text;
 use crate::error::AppError;
+use crate::memo_list_cache_store::{load_for_user, save_for_user};
 use crate::submission::submit_memo;
 use crate::supabase::{
     DeleteMemoOutcome, InsertedMemo, RecentMemo, SupabaseClient, UpdateMemoOutcome,
+    extract_user_id_from_access_token,
 };
 
 use super::chat_widget::{ChatWidget, WidgetAction};
@@ -33,10 +35,14 @@ enum CopyCommandError {
 pub struct ComposeApp<'a> {
     client: &'a SupabaseClient,
     widget: ChatWidget,
+    memo_list_cache_enabled: bool,
 }
 
 enum BackgroundEvent {
-    InitialHistoryLoaded(Vec<RecentMemo>),
+    InitialHistoryLoaded {
+        memos: Vec<RecentMemo>,
+        from_cache: bool,
+    },
     InitialHistoryLoadFailed,
     RefreshHistoryLoaded(Vec<RecentMemo>),
     RefreshHistoryFailed(String),
@@ -72,12 +78,14 @@ impl<'a> ComposeApp<'a> {
         Self {
             client,
             widget: ChatWidget::new(),
+            memo_list_cache_enabled: false,
         }
     }
 
     pub fn new_list(client: &'a SupabaseClient) -> Self {
         let mut app = Self::new(client);
         app.widget.open_memo_list_page();
+        app.memo_list_cache_enabled = true;
         app
     }
 
@@ -154,14 +162,72 @@ impl<'a> ComposeApp<'a> {
     fn start_history_loader(&mut self, tx: UnboundedSender<BackgroundEvent>) {
         self.widget.set_memo_list_loading(true);
         let client = (*self.client).clone();
+        let cache_enabled = self.memo_list_cache_enabled;
         tokio::spawn(async move {
-            let event = match authenticate_with_stored_token(&client).await {
-                Ok(session) => match client.list_recent_memos(&session.access_token).await {
-                    Ok(memos) => BackgroundEvent::InitialHistoryLoaded(memos),
-                    Err(_) => BackgroundEvent::InitialHistoryLoadFailed,
-                },
-                Err(_) => BackgroundEvent::InitialHistoryLoadFailed,
+            let session = match authenticate_with_stored_token(&client).await {
+                Ok(session) => session,
+                Err(_) => {
+                    let _ = tx.send(BackgroundEvent::InitialHistoryLoadFailed);
+                    return;
+                }
             };
+
+            let cache_user_id = if cache_enabled {
+                match extract_user_id_from_access_token(&session.access_token) {
+                    Ok(user_id) => Some(user_id),
+                    Err(err) => {
+                        eprintln!("Warning: failed to parse user id from access token: {err}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            if cache_enabled && let Some(user_id) = cache_user_id.as_deref() {
+                match load_for_user(user_id) {
+                    Ok(Some(cached_memos)) => {
+                        let _ = tx.send(BackgroundEvent::InitialHistoryLoaded {
+                            memos: cached_memos,
+                            from_cache: true,
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        eprintln!("Warning: failed to read memo list cache: {err}");
+                    }
+                }
+            }
+
+            let event = match client.list_recent_memos(&session.access_token).await {
+                Ok(memos) => {
+                    if cache_enabled
+                        && let Some(user_id) = cache_user_id.as_deref()
+                        && let Err(err) = save_for_user(user_id, &memos)
+                    {
+                        eprintln!("Warning: failed to persist memo list cache: {err}");
+                    }
+
+                    if cache_enabled {
+                        BackgroundEvent::RefreshHistoryLoaded(memos)
+                    } else {
+                        BackgroundEvent::InitialHistoryLoaded {
+                            memos,
+                            from_cache: false,
+                        }
+                    }
+                }
+                Err(err) => {
+                    if cache_enabled {
+                        BackgroundEvent::RefreshHistoryFailed(format!(
+                            "Refresh memo list failed: {err}"
+                        ))
+                    } else {
+                        BackgroundEvent::InitialHistoryLoadFailed
+                    }
+                }
+            };
+
             let _ = tx.send(event);
         });
     }
@@ -191,8 +257,10 @@ impl<'a> ComposeApp<'a> {
 
         while let Ok(event) = rx.try_recv() {
             match event {
-                BackgroundEvent::InitialHistoryLoaded(memos) => {
-                    self.widget.set_memo_list_loading(false);
+                BackgroundEvent::InitialHistoryLoaded { memos, from_cache } => {
+                    if !from_cache {
+                        self.widget.set_memo_list_loading(false);
+                    }
                     self.widget.hydrate_history_from_memos(memos);
                 }
                 BackgroundEvent::InitialHistoryLoadFailed => {
@@ -204,7 +272,7 @@ impl<'a> ComposeApp<'a> {
                 }
                 BackgroundEvent::RefreshHistoryFailed(message) => {
                     self.widget.set_memo_list_loading(false);
-                    self.widget.on_validation_error(&message);
+                    self.widget.on_wq_submission_status(&message);
                 }
                 BackgroundEvent::SubmitCreateSuccess {
                     normalized_text,
@@ -337,10 +405,29 @@ impl<'a> ComposeApp<'a> {
         self.widget.set_memo_list_loading(true);
 
         let client = (*self.client).clone();
+        let cache_enabled = self.memo_list_cache_enabled;
         tokio::spawn(async move {
             let event = match authenticate_with_stored_token(&client).await {
                 Ok(session) => match client.list_recent_memos(&session.access_token).await {
-                    Ok(memos) => BackgroundEvent::RefreshHistoryLoaded(memos),
+                    Ok(memos) => {
+                        if cache_enabled {
+                            match extract_user_id_from_access_token(&session.access_token) {
+                                Ok(user_id) => {
+                                    if let Err(err) = save_for_user(&user_id, &memos) {
+                                        eprintln!(
+                                            "Warning: failed to persist memo list cache: {err}"
+                                        );
+                                    }
+                                }
+                                Err(err) => {
+                                    eprintln!(
+                                        "Warning: failed to parse user id from access token: {err}"
+                                    );
+                                }
+                            }
+                        }
+                        BackgroundEvent::RefreshHistoryLoaded(memos)
+                    }
                     Err(err) => BackgroundEvent::RefreshHistoryFailed(format!(
                         "Refresh memo list failed: {err}"
                     )),
