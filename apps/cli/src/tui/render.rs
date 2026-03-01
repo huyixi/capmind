@@ -143,7 +143,7 @@ fn memo_list_footer_text(
     status_message: Option<&str>,
     selected_memo_time: Option<&str>,
 ) -> String {
-    let mode_label = "Mode: LIST";
+    let mode_label = "[LIST]";
     let detail = if loading {
         Some("Fetching memo list...".to_string())
     } else if let Some(query) = search_query {
@@ -155,7 +155,7 @@ fn memo_list_footer_text(
     };
 
     if let Some(detail) = detail {
-        format!("{mode_label} | {detail}")
+        format!("{mode_label} {detail}")
     } else {
         mode_label.to_string()
     }
@@ -303,9 +303,9 @@ fn composer_footer_text(
     status_message: Option<&str>,
 ) -> String {
     let mode_label = if mode == VimMode::Insert {
-        "Mode: INSERT"
+        "[INSERT]"
     } else {
-        "Mode: NORMAL"
+        "[NORMAL]"
     };
 
     let suffix = if quit_confirmation_pending {
@@ -315,7 +315,7 @@ fn composer_footer_text(
     };
 
     if let Some(value) = suffix {
-        format!("{mode_label} | {value}")
+        format!("{mode_label} {value}")
     } else {
         mode_label.to_string()
     }
@@ -682,7 +682,7 @@ mod tests {
     fn composer_footer_appends_status_after_mode() {
         assert_eq!(
             composer_footer_text(VimMode::Insert, false, Some("saving...")),
-            "Mode: INSERT | saving..."
+            "[INSERT] saving..."
         );
     }
 
@@ -690,7 +690,7 @@ mod tests {
     fn composer_footer_uses_quit_hint_when_pending() {
         assert_eq!(
             composer_footer_text(VimMode::Normal, true, None),
-            "Mode: NORMAL | Press Esc again to quit"
+            "[NORMAL] Press Esc again to quit"
         );
     }
 
@@ -698,11 +698,11 @@ mod tests {
     fn composer_footer_uses_mode_when_no_status_or_quit_hint() {
         assert_eq!(
             composer_footer_text(VimMode::Insert, false, None),
-            "Mode: INSERT"
+            "[INSERT]"
         );
         assert_eq!(
             composer_footer_text(VimMode::Normal, false, None),
-            "Mode: NORMAL"
+            "[NORMAL]"
         );
     }
 
@@ -772,7 +772,7 @@ mod tests {
     fn memo_list_footer_prefers_status_message() {
         assert_eq!(
             memo_list_footer_text(false, None, Some("loading"), Some("2026-02-26 10:00:00")),
-            "Mode: LIST | loading"
+            "[LIST] loading"
         );
     }
 
@@ -780,13 +780,13 @@ mod tests {
     fn memo_list_footer_uses_selected_time_without_status() {
         assert_eq!(
             memo_list_footer_text(false, None, None, Some("2026-02-26 10:00:00")),
-            "Mode: LIST | 2026-02-26 10:00:00"
+            "[LIST] 2026-02-26 10:00:00"
         );
     }
 
     #[test]
     fn memo_list_footer_is_empty_without_status_or_selection() {
-        assert_eq!(memo_list_footer_text(false, None, None, None), "Mode: LIST");
+        assert_eq!(memo_list_footer_text(false, None, None, None), "[LIST]");
     }
 
     #[test]
@@ -798,7 +798,7 @@ mod tests {
                 Some("loading"),
                 Some("2026-02-26 10:00:00")
             ),
-            "Mode: LIST | Search: memo"
+            "[LIST] Search: memo"
         );
     }
 
@@ -811,7 +811,7 @@ mod tests {
                 Some("loading"),
                 Some("2026-02-26 10:00:00")
             ),
-            "Mode: LIST | Fetching memo list..."
+            "[LIST] Fetching memo list..."
         );
     }
 }
