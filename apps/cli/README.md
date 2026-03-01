@@ -109,7 +109,28 @@ Shortcut scope is intentionally narrow: only a single positional text argument i
 echo "hello from stdin" | cargo run -- add
 ```
 
-### 7) Update with checksum verification
+### 7) Export memos
+
+Run interactive export:
+
+```bash
+cargo run -- export
+```
+
+`cap export` opens an interactive range selector in terminal:
+- Last 3 days
+- Last week
+- Last month
+- All memos
+
+After selecting a range, CLI writes a file in current directory:
+- Filename format: `capmind-YYYYMMDD-HHmm.txt`
+- If the filename already exists, CLI appends suffix: `-1`, `-2`, ...
+
+In non-interactive mode (for example CI/pipes), `cap export` skips prompts and
+uses default range `Last 3 days`.
+
+### 8) Update with checksum verification
 
 Update to latest release:
 

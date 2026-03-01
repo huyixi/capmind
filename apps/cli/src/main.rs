@@ -2,18 +2,25 @@ mod auth;
 mod cli;
 mod env_loader;
 mod error;
-mod memo_list_cache_store;
+mod export_selector;
+mod memo_export;
 mod self_update;
 mod session_store;
 mod submission;
 mod supabase;
 mod tui;
 
+use chrono::{Local, Utc};
 use clap::Parser;
 use cli::{Cli, Commands, resolve_text, rewrite_shortcut_args};
 use std::io::{self, IsTerminal};
 
 use crate::auth::{authenticate_with_stored_token, login_interactive, logout};
+use crate::export_selector::prompt_export_range;
+use crate::memo_export::{
+    ExportRangePreset, build_export_payload, date_range_for_preset, next_export_file_path,
+    write_export_file,
+};
 use crate::self_update::{SelfUpdateOutcome, run_self_update};
 use crate::submission::submit_memo;
 use crate::supabase::SupabaseClient;
@@ -55,6 +62,29 @@ async fn run() -> Result<(), error::AppError> {
             println!(
                 "Inserted memo successfully\nmemo_id: {}\ncreated_at: {}\nexpires_at: {}",
                 submitted.inserted.id, submitted.inserted.created_at, submitted.session.expires_at
+            );
+        }
+        Commands::Export => {
+            let is_interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+            let selected_range = if is_interactive {
+                prompt_export_range()?
+            } else {
+                ExportRangePreset::Last3Days
+            };
+            let client = SupabaseClient::from_env()?;
+            let session = authenticate_with_stored_token(&client).await?;
+            let memos = client.list_recent_memos(&session.access_token).await?;
+            let date_range = date_range_for_preset(selected_range, Utc::now());
+            let payload = build_export_payload(&memos, &date_range);
+            let cwd = std::env::current_dir()
+                .map_err(|err| error::AppError::Api(format!("Failed to resolve cwd: {err}")))?;
+            let output_path = next_export_file_path(&cwd, Local::now())?;
+            write_export_file(&payload.text, &output_path)?;
+            println!(
+                "Exported {} memo(s)\nrange: {}\nfile: {}",
+                payload.memo_count,
+                selected_range.label(),
+                output_path.display()
             );
         }
         Commands::Compose => {
