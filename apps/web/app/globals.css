@@ -218,10 +218,14 @@
 
     .memo-card-sticky-toggle {
         position: fixed;
-        left: max(1rem, env(safe-area-inset-left));
+        left: 50%;
+        transform: translateX(-50%);
         bottom: max(1rem, env(safe-area-inset-bottom));
-        max-inline-size: calc(
-            100dvw - max(1rem, env(safe-area-inset-left)) - max(1rem, env(safe-area-inset-right))
+        max-inline-size: min(
+            36rem,
+            calc(
+                100dvw - max(1rem, env(safe-area-inset-left)) - max(1rem, env(safe-area-inset-right))
+            )
         );
         z-index: 60;
         border-radius: 0.5rem;
@@ -231,6 +235,9 @@
         font-size: 0.75rem;
         line-height: 1rem;
         color: var(--foreground);
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
     }
 }
