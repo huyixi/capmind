@@ -185,8 +185,12 @@ impl<'a> ComposeApp<'a> {
                     self.handle_copy_selected_memo();
                 }
                 WidgetAction::LoginForPendingSubmit(submit) => {
-                    self.handle_login_for_pending_submit(background_tx.clone(), &mut terminal, submit)
-                        .await?;
+                    self.handle_login_for_pending_submit(
+                        background_tx.clone(),
+                        &mut terminal,
+                        submit,
+                    )
+                    .await?;
                 }
             }
         }
@@ -347,7 +351,8 @@ impl<'a> ComposeApp<'a> {
                         self.invalidate_cached_session();
                         self.widget.show_auth_required_submit_prompt(submit);
                     } else {
-                        self.widget.on_submit_error(pending_submit_text(&submit), &message);
+                        self.widget
+                            .on_submit_error(pending_submit_text(&submit), &message);
                     }
                 }
                 BackgroundEvent::WqStatus(message) => {
@@ -560,30 +565,29 @@ impl<'a> ComposeApp<'a> {
     ) {
         let client = (*self.client).clone();
         tokio::spawn(async move {
-            let event =
-                match submit_edit_with_access_token(
-                    &client,
-                    &access_token,
-                    &memo_id,
-                    &expected_version,
-                    &normalized,
-                )
-                .await
-                {
-                    Ok(success) => BackgroundEvent::SubmitEditSuccess(success),
-                    Err(err) => {
-                        let is_auth_error = is_auth_error(&err);
-                        BackgroundEvent::SubmitFailed {
-                            submit: PendingSubmitAction::Edit {
-                                memo_id,
-                                expected_version,
-                                text: normalized,
-                            },
-                            message: err.to_string(),
-                            is_auth_error,
-                        }
+            let event = match submit_edit_with_access_token(
+                &client,
+                &access_token,
+                &memo_id,
+                &expected_version,
+                &normalized,
+            )
+            .await
+            {
+                Ok(success) => BackgroundEvent::SubmitEditSuccess(success),
+                Err(err) => {
+                    let is_auth_error = is_auth_error(&err);
+                    BackgroundEvent::SubmitFailed {
+                        submit: PendingSubmitAction::Edit {
+                            memo_id,
+                            expected_version,
+                            text: normalized,
+                        },
+                        message: err.to_string(),
+                        is_auth_error,
                     }
-                };
+                }
+            };
             let _ = tx.send(event);
         });
     }
@@ -937,8 +941,8 @@ impl Drop for TerminalSession {
 #[cfg(test)]
 mod tests {
     use super::{format_history_load_error, is_auth_error, pending_submit_text};
-    use crate::tui::chat_widget::PendingSubmitAction;
     use crate::error::AppError;
+    use crate::tui::chat_widget::PendingSubmitAction;
 
     #[test]
     fn history_load_error_prefixes_message() {
