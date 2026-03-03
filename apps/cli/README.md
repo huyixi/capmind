@@ -152,7 +152,12 @@ replacement fails.
 
 - CLI first attempts refresh-token login from `~/.capmind/auth.json`.
 - If refresh fails or missing, CLI asks you to run `cap login`.
-- `cap compose`/`cap list`: if not logged in, CLI prompts `Press Enter to login now`.
+- `cap compose`/`cap list` open TUI immediately, then auth/history load runs in background.
+- If save is attempted while auth is missing/expired, composer footer shows:
+  - `Publish requires login. [L]ogin now  [S]ave draft  [C]ancel`
+  - `L`: run interactive login flow and retry submit
+  - `S`: keep current text as draft in editor (no publish)
+  - `C`/`Esc`: cancel prompt and continue editing
 - Successful login stores refresh token to `~/.capmind/auth.json` (field: `refresh_token`).
 - Email/password are only entered interactively in `cap login`.
 

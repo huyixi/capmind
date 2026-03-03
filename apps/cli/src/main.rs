@@ -90,12 +90,10 @@ async fn run() -> Result<(), error::AppError> {
         }
         Commands::Compose => {
             let client = SupabaseClient::from_env()?;
-            ensure_logged_in_or_prompt(&client).await?;
             tui::run(&client).await?;
         }
         Commands::List => {
             let client = SupabaseClient::from_env()?;
-            ensure_logged_in_or_prompt(&client).await?;
             tui::run_list(&client).await?;
         }
         Commands::Update(args) => {
@@ -108,29 +106,5 @@ async fn run() -> Result<(), error::AppError> {
         }
     }
 
-    Ok(())
-}
-
-async fn ensure_logged_in_or_prompt(client: &SupabaseClient) -> Result<(), error::AppError> {
-    if authenticate_with_stored_token(client).await.is_ok() {
-        return Ok(());
-    }
-
-    if !io::stdin().is_terminal() {
-        return Err(error::AppError::Auth(
-            "You are not logged in. Run `cap login`.".to_string(),
-        ));
-    }
-
-    println!("You are not logged in.");
-    println!("Press Enter to login now (Ctrl+C to cancel).");
-
-    let mut line = String::new();
-    io::stdin().read_line(&mut line).map_err(|err| {
-        error::AppError::InvalidInput(format!("Failed reading login confirmation: {err}"))
-    })?;
-
-    let _ = login_interactive(client).await?;
-    println!("Login successful.");
     Ok(())
 }

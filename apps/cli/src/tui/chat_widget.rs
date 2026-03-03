@@ -13,10 +13,25 @@ use super::types::{FocusArea, HistoryCell};
 const SUBMIT_SUCCESS_TIP_DURATION: Duration = Duration::from_secs(1);
 const MEMO_LIST_PAGE_STEP: isize = 10;
 const TMUX_PREFIX_TIMEOUT: Duration = Duration::from_millis(1500);
+const AUTH_REQUIRED_SAVE_PROMPT: &str =
+    "Publish requires login. [L]ogin now  [S]ave draft  [C]ancel";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingSubmitAction {
+    Create {
+        text: String,
+    },
+    Edit {
+        memo_id: String,
+        expected_version: String,
+        text: String,
+    },
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WidgetAction {
     None,
+    LoginForPendingSubmit(PendingSubmitAction),
     SubmitCreate(String),
     SubmitEdit {
         memo_id: String,
@@ -86,6 +101,7 @@ pub struct ChatWidget {
     status_message_expires_at: Option<Instant>,
     wq_submission_in_progress: bool,
     wq_failure_prompt: Option<String>,
+    auth_required_submit: Option<PendingSubmitAction>,
     clean_composer_text: String,
     composer_dirty: bool,
     tmux_prefix_pending: bool,
@@ -119,6 +135,7 @@ impl ChatWidget {
             status_message_expires_at: None,
             wq_submission_in_progress: false,
             wq_failure_prompt: None,
+            auth_required_submit: None,
             clean_composer_text: String::new(),
             composer_dirty: false,
             tmux_prefix_pending: false,
@@ -156,6 +173,11 @@ impl ChatWidget {
             self.clear_tmux_prefix();
             self.quit_confirmation_pending = false;
             return self.handle_delete_confirmation_key(key_event);
+        }
+
+        if let Some(action) = self.handle_auth_required_submit_key(key_event) {
+            self.clear_tmux_prefix();
+            return action;
         }
 
         if self.tmux_prefix_pending {
@@ -311,6 +333,9 @@ impl ChatWidget {
     }
 
     pub fn status_message(&self) -> Option<&str> {
+        if self.auth_required_submit.is_some() {
+            return Some(AUTH_REQUIRED_SAVE_PROMPT);
+        }
         if let Some(expires_at) = self.status_message_expires_at
             && Instant::now() >= expires_at
         {
@@ -321,6 +346,10 @@ impl ChatWidget {
 
     pub fn wq_failure_prompt(&self) -> Option<&str> {
         self.wq_failure_prompt.as_deref()
+    }
+
+    pub fn show_auth_required_submit_prompt(&mut self, submit: PendingSubmitAction) {
+        self.auth_required_submit = Some(submit);
     }
 
     #[cfg(test)]
@@ -348,7 +377,7 @@ impl ChatWidget {
     }
 
     pub fn on_submit_started(&mut self) {
-        self.reset_composer_state();
+        self.auth_required_submit = None;
         self.set_status_message("Submitting...".to_string());
     }
 
@@ -382,6 +411,7 @@ impl ChatWidget {
         let full_text = format!("{message}\n\n{text}");
         self.push_history(full_text);
         self.maybe_recompute_memo_list_filter();
+        self.auth_required_submit = None;
         self.set_status_message(message.to_string());
     }
 
@@ -730,6 +760,47 @@ impl ChatWidget {
         }
     }
 
+    fn handle_auth_required_submit_key(&mut self, key_event: KeyEvent) -> Option<WidgetAction> {
+        self.auth_required_submit.as_ref()?;
+
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('L'),
+                modifiers,
+                ..
+            } if is_plain_or_shift(modifiers) => {
+                let pending = self.auth_required_submit.take()?;
+                Some(WidgetAction::LoginForPendingSubmit(pending))
+            }
+            KeyEvent {
+                code: KeyCode::Char('S'),
+                modifiers,
+                ..
+            } if is_plain_or_shift(modifiers) => {
+                self.auth_required_submit = None;
+                self.set_status_message("Saved as draft locally.".to_string());
+                Some(WidgetAction::None)
+            }
+            KeyEvent {
+                code: KeyCode::Char('C'),
+                modifiers,
+                ..
+            } if is_plain_or_shift(modifiers) => {
+                self.auth_required_submit = None;
+                self.set_status_message("Publish canceled.".to_string());
+                Some(WidgetAction::None)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                self.auth_required_submit = None;
+                self.set_status_message("Publish canceled.".to_string());
+                Some(WidgetAction::None)
+            }
+            _ => None,
+        }
+    }
+
     fn handle_help_overlay_key(&mut self, key_event: KeyEvent) -> WidgetAction {
         match key_event.code {
             KeyCode::Esc => {
@@ -1048,6 +1119,7 @@ impl ChatWidget {
         self.focus = FocusArea::Composer;
         self.page_mode = PageMode::Composer;
         self.composer_mode = ComposerMode::Create;
+        self.auth_required_submit = None;
         self.set_clean_composer_text("");
     }
 
@@ -1213,7 +1285,10 @@ fn is_help_key(key_event: KeyEvent) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatWidget, HelpOverlayContext, PageMode, TMUX_PREFIX_TIMEOUT, WidgetAction};
+    use super::{
+        AUTH_REQUIRED_SAVE_PROMPT, ChatWidget, HelpOverlayContext, PageMode, PendingSubmitAction,
+        TMUX_PREFIX_TIMEOUT, WidgetAction,
+    };
     use crate::supabase::RecentMemo;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::time::{Duration, Instant};
@@ -1330,6 +1405,71 @@ mod tests {
                 text: "memo-1x".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn auth_required_prompt_shows_in_status_footer() {
+        let mut widget = ChatWidget::new();
+        widget.show_auth_required_submit_prompt(PendingSubmitAction::Create {
+            text: "draft".to_string(),
+        });
+
+        assert_eq!(widget.status_message(), Some(AUTH_REQUIRED_SAVE_PROMPT));
+    }
+
+    #[test]
+    fn auth_required_prompt_login_action_emits_pending_submit() {
+        let mut widget = ChatWidget::new();
+        widget.show_auth_required_submit_prompt(PendingSubmitAction::Create {
+            text: "draft".to_string(),
+        });
+
+        let action = widget.handle_key_event(shift_char('L'));
+        assert_eq!(
+            action,
+            WidgetAction::LoginForPendingSubmit(PendingSubmitAction::Create {
+                text: "draft".to_string(),
+            })
+        );
+        assert_eq!(widget.status_message(), None);
+    }
+
+    #[test]
+    fn auth_required_prompt_save_draft_keeps_text() {
+        let mut widget = ChatWidget::new();
+        type_text(&mut widget, "hello");
+        widget.show_auth_required_submit_prompt(PendingSubmitAction::Create {
+            text: "hello".to_string(),
+        });
+
+        let action = widget.handle_key_event(shift_char('S'));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "hello");
+        assert_eq!(widget.status_message(), Some("Saved as draft locally."));
+    }
+
+    #[test]
+    fn auth_required_prompt_does_not_block_lowercase_typing() {
+        let mut widget = ChatWidget::new();
+        widget.show_auth_required_submit_prompt(PendingSubmitAction::Create {
+            text: "".to_string(),
+        });
+
+        let action = widget.handle_key_event(key(KeyCode::Char('l')));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "l");
+        assert_eq!(widget.status_message(), Some(AUTH_REQUIRED_SAVE_PROMPT));
+    }
+
+    #[test]
+    fn submit_started_keeps_composer_buffer() {
+        let mut widget = ChatWidget::new();
+        type_text(&mut widget, "keep me");
+
+        widget.on_submit_started();
+
+        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "keep me");
+        assert_eq!(widget.status_message(), Some("Submitting..."));
     }
 
     #[test]
