@@ -17,7 +17,7 @@ use crate::cli::resolve_text;
 use crate::error::AppError;
 use crate::submission::submit_memo;
 use crate::supabase::{
-    DeleteMemoOutcome, InsertedMemo, RecentMemo, SupabaseClient, UpdateMemoOutcome,
+    DeleteMemoOutcome, InsertedMemo, RecentMemo, Session, SupabaseClient, UpdateMemoOutcome,
     extract_user_id_from_access_token,
 };
 
@@ -36,6 +36,7 @@ pub struct ComposeApp<'a> {
     client: &'a SupabaseClient,
     widget: ChatWidget,
     memo_list_cache_enabled: bool,
+    cached_session: Option<Session>,
 }
 
 enum BackgroundEvent {
@@ -54,8 +55,9 @@ enum BackgroundEvent {
     },
     SubmitEditSuccess(EditSubmitSuccess),
     SubmitFailed {
-        normalized_text: String,
+        submit: PendingSubmitAction,
         message: String,
+        is_auth_error: bool,
     },
     WqStatus(String),
     WqCreateSuccess {
@@ -81,6 +83,7 @@ impl<'a> ComposeApp<'a> {
             client,
             widget: ChatWidget::new(),
             memo_list_cache_enabled: false,
+            cached_session: None,
         }
     }
 
@@ -89,6 +92,31 @@ impl<'a> ComposeApp<'a> {
         app.widget.open_memo_list_page();
         app.memo_list_cache_enabled = true;
         app
+    }
+
+    fn cached_access_token(&self) -> Option<&str> {
+        self.cached_session
+            .as_ref()
+            .map(|session| session.access_token.as_str())
+    }
+
+    fn cache_session(&mut self, session: Session) {
+        self.cached_session = Some(session);
+    }
+
+    fn invalidate_cached_session(&mut self) {
+        self.cached_session = None;
+    }
+
+    async fn resolve_submit_access_token(&mut self) -> Result<String, AppError> {
+        if let Some(access_token) = self.cached_access_token() {
+            return Ok(access_token.to_string());
+        }
+
+        let session = authenticate_with_stored_token(self.client).await?;
+        let access_token = session.access_token.clone();
+        self.cache_session(session);
+        Ok(access_token)
     }
 
     pub async fn run(mut self) -> Result<(), AppError> {
@@ -311,10 +339,16 @@ impl<'a> ComposeApp<'a> {
                     }
                 },
                 BackgroundEvent::SubmitFailed {
-                    normalized_text,
+                    submit,
                     message,
+                    is_auth_error,
                 } => {
-                    self.widget.on_submit_error(&normalized_text, &message);
+                    if is_auth_error {
+                        self.invalidate_cached_session();
+                        self.widget.show_auth_required_submit_prompt(submit);
+                    } else {
+                        self.widget.on_submit_error(pending_submit_text(&submit), &message);
+                    }
                 }
                 BackgroundEvent::WqStatus(message) => {
                     self.widget.on_wq_submission_status(&message);
@@ -357,7 +391,7 @@ impl<'a> ComposeApp<'a> {
     }
 
     async fn handle_submit_create(&mut self, tx: UnboundedSender<BackgroundEvent>, text: String) {
-        let normalized = match resolve_text(Some(text.clone())) {
+        let normalized = match resolve_text(Some(text)) {
             Ok(value) => value,
             Err(err) => {
                 self.widget.on_validation_error(&err.to_string());
@@ -365,18 +399,19 @@ impl<'a> ComposeApp<'a> {
             }
         };
 
-        match authenticate_with_stored_token(self.client).await {
-            Ok(session) => {
-                self.widget.on_submit_started();
-                self.start_submit_create_submission(tx, normalized, session.access_token);
-            }
+        let access_token = match self.resolve_submit_access_token().await {
+            Ok(access_token) => access_token,
             Err(_) => {
                 self.widget
                     .show_auth_required_submit_prompt(PendingSubmitAction::Create {
                         text: normalized,
                     });
+                return;
             }
-        }
+        };
+
+        self.widget.on_submit_started();
+        self.start_submit_create_submission(tx, normalized, access_token);
     }
 
     async fn handle_submit_edit(
@@ -386,7 +421,7 @@ impl<'a> ComposeApp<'a> {
         expected_version: String,
         text: String,
     ) {
-        let normalized = match resolve_text(Some(text.clone())) {
+        let normalized = match resolve_text(Some(text)) {
             Ok(value) => value,
             Err(err) => {
                 self.widget.on_validation_error(&err.to_string());
@@ -394,17 +429,8 @@ impl<'a> ComposeApp<'a> {
             }
         };
 
-        match authenticate_with_stored_token(self.client).await {
-            Ok(session) => {
-                self.widget.on_submit_started();
-                self.start_submit_edit_submission(
-                    tx,
-                    memo_id,
-                    expected_version,
-                    normalized,
-                    session.access_token,
-                );
-            }
+        let access_token = match self.resolve_submit_access_token().await {
+            Ok(access_token) => access_token,
             Err(_) => {
                 self.widget
                     .show_auth_required_submit_prompt(PendingSubmitAction::Edit {
@@ -412,8 +438,12 @@ impl<'a> ComposeApp<'a> {
                         expected_version,
                         text: normalized,
                     });
+                return;
             }
-        }
+        };
+
+        self.widget.on_submit_started();
+        self.start_submit_edit_submission(tx, memo_id, expected_version, normalized, access_token);
     }
 
     async fn handle_delete_memo(&mut self, memo_id: String, expected_version: String) {
@@ -506,10 +536,14 @@ impl<'a> ComposeApp<'a> {
                     normalized_text: normalized,
                     inserted,
                 },
-                Err(err) => BackgroundEvent::SubmitFailed {
-                    normalized_text: normalized,
-                    message: err.to_string(),
-                },
+                Err(err) => {
+                    let is_auth_error = is_auth_error(&err);
+                    BackgroundEvent::SubmitFailed {
+                        submit: PendingSubmitAction::Create { text: normalized },
+                        message: err.to_string(),
+                        is_auth_error,
+                    }
+                }
             };
             // Local channel send cannot fail in normal run loop, ignore if UI already closed.
             let _ = tx.send(event);
@@ -537,10 +571,18 @@ impl<'a> ComposeApp<'a> {
                 .await
                 {
                     Ok(success) => BackgroundEvent::SubmitEditSuccess(success),
-                    Err(err) => BackgroundEvent::SubmitFailed {
-                        normalized_text: normalized,
-                        message: err.to_string(),
-                    },
+                    Err(err) => {
+                        let is_auth_error = is_auth_error(&err);
+                        BackgroundEvent::SubmitFailed {
+                            submit: PendingSubmitAction::Edit {
+                                memo_id,
+                                expected_version,
+                                text: normalized,
+                            },
+                            message: err.to_string(),
+                            is_auth_error,
+                        }
+                    }
                 };
             let _ = tx.send(event);
         });
@@ -558,10 +600,12 @@ impl<'a> ComposeApp<'a> {
 
         match login_result {
             Ok(session) => {
+                let access_token = session.access_token.clone();
+                self.cache_session(session);
                 self.widget.on_submit_started();
                 match submit {
                     PendingSubmitAction::Create { text } => {
-                        self.start_submit_create_submission(tx, text, session.access_token);
+                        self.start_submit_create_submission(tx, text, access_token);
                     }
                     PendingSubmitAction::Edit {
                         memo_id,
@@ -573,7 +617,7 @@ impl<'a> ComposeApp<'a> {
                             memo_id,
                             expected_version,
                             text,
-                            session.access_token,
+                            access_token,
                         );
                     }
                 }
@@ -711,6 +755,17 @@ fn wq_retry_delay(attempt: usize) -> Duration {
 
 fn format_history_load_error(err: &AppError) -> String {
     format!("Load memo list failed: {err}")
+}
+
+fn pending_submit_text(submit: &PendingSubmitAction) -> &str {
+    match submit {
+        PendingSubmitAction::Create { text } => text,
+        PendingSubmitAction::Edit { text, .. } => text,
+    }
+}
+
+fn is_auth_error(err: &AppError) -> bool {
+    matches!(err, AppError::Auth(_))
 }
 
 fn copy_to_clipboard(text: &str) -> Result<(), String> {
@@ -881,12 +936,37 @@ impl Drop for TerminalSession {
 
 #[cfg(test)]
 mod tests {
-    use super::format_history_load_error;
+    use super::{format_history_load_error, is_auth_error, pending_submit_text};
+    use crate::tui::chat_widget::PendingSubmitAction;
     use crate::error::AppError;
 
     #[test]
     fn history_load_error_prefixes_message() {
         let message = format_history_load_error(&AppError::Auth("You are not logged in".into()));
         assert_eq!(message, "Load memo list failed: You are not logged in");
+    }
+
+    #[test]
+    fn pending_submit_text_uses_create_text() {
+        let submit = PendingSubmitAction::Create {
+            text: "draft".to_string(),
+        };
+        assert_eq!(pending_submit_text(&submit), "draft");
+    }
+
+    #[test]
+    fn pending_submit_text_uses_edit_text() {
+        let submit = PendingSubmitAction::Edit {
+            memo_id: "memo-1".to_string(),
+            expected_version: "7".to_string(),
+            text: "edited".to_string(),
+        };
+        assert_eq!(pending_submit_text(&submit), "edited");
+    }
+
+    #[test]
+    fn is_auth_error_detects_auth_variant() {
+        assert!(is_auth_error(&AppError::Auth("not logged in".to_string())));
+        assert!(!is_auth_error(&AppError::Api("api failure".to_string())));
     }
 }
