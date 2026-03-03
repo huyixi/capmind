@@ -1,7 +1,7 @@
 {
   "name": "capmind-cli-workspace",
   "private": true,
-  "version": "0.2.10",
+  "version": "0.3.0",
   "scripts": {
     "dev": "cargo run -- --help",
     "build": "cargo build",
