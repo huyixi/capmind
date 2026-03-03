@@ -9,6 +9,7 @@ mod session_store;
 mod submission;
 mod supabase;
 mod tui;
+mod update;
 
 use chrono::{Local, Utc};
 use clap::Parser;
@@ -21,9 +22,9 @@ use crate::memo_export::{
     ExportRangePreset, build_export_payload, date_range_for_preset, next_export_file_path,
     write_export_file,
 };
-use crate::self_update::{SelfUpdateOutcome, run_self_update};
 use crate::submission::submit_memo;
 use crate::supabase::SupabaseClient;
+use crate::update::{render_update_result, render_update_result_json, run_update};
 
 #[tokio::main]
 async fn main() {
@@ -97,20 +98,14 @@ async fn run() -> Result<(), error::AppError> {
             ensure_logged_in_or_prompt(&client).await?;
             tui::run_list(&client).await?;
         }
-        Commands::Update(args) => match run_self_update(args.version.as_deref()).await? {
-            SelfUpdateOutcome::UpToDate { version } => {
-                println!("Already up to date (version {version})");
+        Commands::Update(args) => {
+            let result = run_update(&args).await?;
+            if args.json {
+                println!("{}", render_update_result_json(&result)?);
+            } else {
+                println!("{}", render_update_result(&result));
             }
-            SelfUpdateOutcome::Updated {
-                from_version,
-                to_version,
-                tag,
-            } => {
-                println!(
-                    "Update successful\nfrom: {from_version}\nto: {to_version}\nrelease_tag: {tag}"
-                );
-            }
-        },
+        }
     }
 
     Ok(())

@@ -35,6 +35,15 @@ pub struct UpdateArgs {
         help = "Target version (for example 0.2.1). Defaults to latest release."
     )]
     pub version: Option<String>,
+    #[arg(long, help = "Check latest version without installing updates.")]
+    pub check: bool,
+    #[arg(long, help = "Output update status as JSON.")]
+    pub json: bool,
+    #[arg(
+        long,
+        help = "Force standalone self-update flow even when install appears package-managed."
+    )]
+    pub force_standalone: bool,
 }
 
 pub fn rewrite_shortcut_args<I>(args: I) -> Vec<String>

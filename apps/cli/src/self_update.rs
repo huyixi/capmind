@@ -46,6 +46,14 @@ pub async fn run_self_update(
     run_self_update_with_config(requested_version, &config).await
 }
 
+pub async fn latest_release_tag() -> Result<String, AppError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|err| AppError::Network(format!("Failed to build HTTP client: {err}")))?;
+    resolve_latest_release_tag(&client, RELEASES_URL).await
+}
+
 async fn run_self_update_with_config(
     requested_version: Option<&str>,
     config: &UpdateConfig<'_>,
@@ -99,7 +107,7 @@ fn normalize_target_tag(version: &str) -> String {
     }
 }
 
-fn release_version_from_tag(tag: &str) -> &str {
+pub fn release_version_from_tag(tag: &str) -> &str {
     tag.strip_prefix(TAG_PREFIX).unwrap_or(tag)
 }
 
