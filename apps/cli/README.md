@@ -34,12 +34,13 @@ TUI keys:
 - `Ctrl+S`: submit memo (fallback for terminals that don't emit `Ctrl+Enter`)
 - Composer vim mode: starts in `INSERT`, `Esc` switches to `NORMAL`
 - `Esc` in `NORMAL` (or outside Composer insert mode): press twice to quit TUI (with confirmation)
+- If Composer has unsaved changes and you try to quit, footer shows: `[S]ubmit+quit / [D]iscard+quit / [C]/Esc continue`
+- If quit-submit fails after retries, text is cached locally and will be retried next launch
 - `NORMAL` mode navigation/edit keys: arrows, `h`/`j`/`k`/`l`, `b`, `0`, `$`, `i`/`a`/`I`/`A`/`o`/`O`, `x`, `dd`
 - `NORMAL` mode tmux-style commands use prefix `Ctrl+b`:
   - `Ctrl+b w`/`Ctrl+b s`: submit and stay
   - `Ctrl+b W`: submit in background (up to 3 attempts, retry delays `1s`, `3s`) and quit on success
-  - `Ctrl+b q`: quit only if no unsaved changes
-  - `Ctrl+b Q`: quit without submit
+  - `Ctrl+b q` / `Ctrl+b Q`: quit (if unsaved, enter submit/discard confirmation)
   - `Ctrl+b l`: open full-page memo list
   - `Ctrl+b p`: toggle split composer+history layout
   - `Ctrl+b ?`: open help popup (`?` / `Esc` / `q` to close)

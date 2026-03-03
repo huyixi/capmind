@@ -15,6 +15,8 @@ const MEMO_LIST_PAGE_STEP: isize = 10;
 const TMUX_PREFIX_TIMEOUT: Duration = Duration::from_millis(1500);
 const AUTH_REQUIRED_SAVE_PROMPT: &str =
     "Publish requires login. [L]ogin now  [S]ave draft  [C]ancel";
+const QUIT_WITH_UNSAVED_PROMPT: &str =
+    "Unsaved content. [S]ubmit+quit  [D]iscard+quit  [C]/Esc continue";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingSubmitAction {
@@ -93,6 +95,7 @@ pub struct ChatWidget {
     pending_delete: Option<PendingDelete>,
     composer_mode: ComposerMode,
     quit_confirmation_pending: bool,
+    quit_submit_confirm_pending: bool,
     page_mode: PageMode,
     split_list_open: bool,
     memo_list_loading: bool,
@@ -100,7 +103,6 @@ pub struct ChatWidget {
     status_message: Option<String>,
     status_message_expires_at: Option<Instant>,
     wq_submission_in_progress: bool,
-    wq_failure_prompt: Option<String>,
     auth_required_submit: Option<PendingSubmitAction>,
     clean_composer_text: String,
     composer_dirty: bool,
@@ -127,6 +129,7 @@ impl ChatWidget {
             pending_delete: None,
             composer_mode: ComposerMode::Create,
             quit_confirmation_pending: false,
+            quit_submit_confirm_pending: false,
             page_mode: PageMode::Composer,
             split_list_open: false,
             memo_list_loading: false,
@@ -134,7 +137,6 @@ impl ChatWidget {
             status_message: None,
             status_message_expires_at: None,
             wq_submission_in_progress: false,
-            wq_failure_prompt: None,
             auth_required_submit: None,
             clean_composer_text: String::new(),
             composer_dirty: false,
@@ -154,9 +156,9 @@ impl ChatWidget {
 
         self.expire_tmux_prefix_if_needed();
 
-        if self.wq_failure_prompt.is_some() {
+        if self.quit_submit_confirm_pending {
             self.clear_tmux_prefix();
-            return self.handle_wq_failure_prompt_key(key_event);
+            return self.handle_quit_submit_confirm_key(key_event);
         }
 
         if self.wq_submission_in_progress {
@@ -194,7 +196,7 @@ impl ChatWidget {
         }
 
         if self.split_list_open && self.focus == FocusArea::History && is_quit_key(key_event) {
-            return WidgetAction::Quit;
+            return self.request_quit();
         }
 
         if self.focus == FocusArea::Composer
@@ -207,7 +209,7 @@ impl ChatWidget {
 
         if key_event.code == KeyCode::Esc {
             if self.quit_confirmation_pending {
-                return WidgetAction::Quit;
+                return self.request_quit();
             }
             self.quit_confirmation_pending = true;
             return WidgetAction::None;
@@ -227,13 +229,13 @@ impl ChatWidget {
 
     pub fn on_wq_submission_failed(&mut self, message: &str) {
         self.wq_submission_in_progress = false;
-        self.wq_failure_prompt = Some(message.to_string());
+        self.quit_submit_confirm_pending = false;
         self.set_status_message(format!("Save failed: {message}"));
     }
 
     pub fn on_wq_submission_succeeded(&mut self) {
         self.wq_submission_in_progress = false;
-        self.wq_failure_prompt = None;
+        self.quit_submit_confirm_pending = false;
         self.clear_status_message();
     }
 
@@ -344,11 +346,8 @@ impl ChatWidget {
         self.status_message.as_deref()
     }
 
-    pub fn wq_failure_prompt(&self) -> Option<&str> {
-        self.wq_failure_prompt.as_deref()
-    }
-
     pub fn show_auth_required_submit_prompt(&mut self, submit: PendingSubmitAction) {
+        self.quit_submit_confirm_pending = false;
         self.auth_required_submit = Some(submit);
     }
 
@@ -377,6 +376,7 @@ impl ChatWidget {
     }
 
     pub fn on_submit_started(&mut self) {
+        self.quit_submit_confirm_pending = false;
         self.auth_required_submit = None;
         self.set_status_message("Submitting...".to_string());
     }
@@ -736,24 +736,29 @@ impl ChatWidget {
         }
     }
 
-    fn handle_wq_failure_prompt_key(&mut self, key_event: KeyEvent) -> WidgetAction {
+    fn handle_quit_submit_confirm_key(&mut self, key_event: KeyEvent) -> WidgetAction {
         match key_event.code {
-            KeyCode::Enter => {
-                self.wq_failure_prompt = None;
-                WidgetAction::Quit
+            KeyCode::Char(c)
+                if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'s') =>
+            {
+                self.clear_quit_submit_confirmation();
+                self.build_submit_action(true)
             }
-            KeyCode::Char(c) if c.eq_ignore_ascii_case(&'q') || c.eq_ignore_ascii_case(&'y') => {
-                self.wq_failure_prompt = None;
+            KeyCode::Char(c)
+                if is_plain_or_shift(key_event.modifiers) && c.eq_ignore_ascii_case(&'d') =>
+            {
+                self.clear_quit_submit_confirmation();
                 WidgetAction::Quit
             }
             KeyCode::Esc => {
-                self.wq_failure_prompt = None;
-                self.set_status_message("Continue editing. Use w/s to retry.".to_string());
+                self.clear_quit_submit_confirmation();
                 WidgetAction::None
             }
-            KeyCode::Char(c) if c.eq_ignore_ascii_case(&'c') || c.eq_ignore_ascii_case(&'n') => {
-                self.wq_failure_prompt = None;
-                self.set_status_message("Continue editing. Use w/s to retry.".to_string());
+            KeyCode::Char(c)
+                if is_plain_or_shift(key_event.modifiers)
+                    && (c.eq_ignore_ascii_case(&'c') || c.eq_ignore_ascii_case(&'n')) =>
+            {
+                self.clear_quit_submit_confirmation();
                 WidgetAction::None
             }
             _ => WidgetAction::None,
@@ -787,14 +792,12 @@ impl ChatWidget {
                 ..
             } if is_plain_or_shift(modifiers) => {
                 self.auth_required_submit = None;
-                self.set_status_message("Publish canceled.".to_string());
                 Some(WidgetAction::None)
             }
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
                 self.auth_required_submit = None;
-                self.set_status_message("Publish canceled.".to_string());
                 Some(WidgetAction::None)
             }
             _ => None,
@@ -819,6 +822,25 @@ impl ChatWidget {
         WidgetAction::None
     }
 
+    fn request_quit(&mut self) -> WidgetAction {
+        self.quit_confirmation_pending = false;
+        if self.composer_dirty {
+            self.quit_submit_confirm_pending = true;
+            self.set_status_message(QUIT_WITH_UNSAVED_PROMPT.to_string());
+            return WidgetAction::None;
+        }
+
+        self.clear_quit_submit_confirmation();
+        WidgetAction::Quit
+    }
+
+    fn clear_quit_submit_confirmation(&mut self) {
+        self.quit_submit_confirm_pending = false;
+        if self.status_message.as_deref() == Some(QUIT_WITH_UNSAVED_PROMPT) {
+            self.clear_status_message();
+        }
+    }
+
     fn begin_tmux_prefix(&mut self) {
         self.tmux_prefix_pending = true;
         self.tmux_prefix_started_at = Some(Instant::now());
@@ -835,7 +857,6 @@ impl ChatWidget {
         };
         if Instant::now().saturating_duration_since(started_at) >= TMUX_PREFIX_TIMEOUT {
             self.clear_tmux_prefix();
-            self.set_status_message("Tmux prefix timed out.".to_string());
         }
     }
 
@@ -848,12 +869,10 @@ impl ChatWidget {
         self.clear_tmux_prefix();
 
         if !is_plain_or_shift(key_event.modifiers) {
-            self.set_status_message("Unknown tmux command.".to_string());
             return WidgetAction::None;
         }
 
         let KeyCode::Char(c) = key_event.code else {
-            self.set_status_message("Unknown tmux command.".to_string());
             return WidgetAction::None;
         };
 
@@ -867,13 +886,12 @@ impl ChatWidget {
             return action;
         }
 
-        self.set_status_message("Unknown tmux command.".to_string());
         WidgetAction::None
     }
 
     fn handle_memo_list_prefixed_command(&mut self, c: char) -> Option<WidgetAction> {
         let action = match c {
-            c if c.eq_ignore_ascii_case(&'q') => WidgetAction::Quit,
+            c if c.eq_ignore_ascii_case(&'q') => self.request_quit(),
             c if c.eq_ignore_ascii_case(&'c') => {
                 self.return_to_composer_insert_mode();
                 WidgetAction::None
@@ -907,15 +925,8 @@ impl ChatWidget {
             }
             'w' | 's' => self.build_submit_action(false),
             'W' => self.build_submit_action(true),
-            'q' => {
-                if self.composer_dirty {
-                    self.set_status_message("Unsaved changes. Use w/s, W, or Q.".to_string());
-                    WidgetAction::None
-                } else {
-                    WidgetAction::Quit
-                }
-            }
-            'Q' => WidgetAction::Quit,
+            'q' => self.request_quit(),
+            'Q' => self.request_quit(),
             'l' => {
                 self.page_mode = PageMode::MemoList;
                 self.focus = FocusArea::History;
@@ -926,11 +937,6 @@ impl ChatWidget {
                 if !self.split_list_open && self.focus == FocusArea::History {
                     self.focus = FocusArea::Composer;
                 }
-                self.set_status_message(if self.split_list_open {
-                    "Split list opened. Tab switches to list pane.".to_string()
-                } else {
-                    "Split list hidden.".to_string()
-                });
                 WidgetAction::None
             }
             _ => return None,
@@ -943,10 +949,6 @@ impl ChatWidget {
         let text = self.bottom_pane.composer().text();
         if before_quit {
             self.wq_submission_in_progress = true;
-            self.wq_failure_prompt = None;
-            self.set_status_message("W submitting in background...".to_string());
-        } else {
-            self.set_status_message("w submitting...".to_string());
         }
 
         match &self.composer_mode {
@@ -1574,7 +1576,7 @@ mod tests {
         assert_eq!(action, WidgetAction::None);
         assert_eq!(
             widget.status_message(),
-            Some("Unsaved changes. Use w/s, W, or Q.")
+            Some("Unsaved content. [S]ubmit+quit  [D]iscard+quit  [C]/Esc continue")
         );
     }
 
@@ -1586,7 +1588,11 @@ mod tests {
 
         let action = tmux_prefix_shift_char(&mut widget, 'Q');
 
-        assert_eq!(action, WidgetAction::Quit);
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(
+            widget.status_message(),
+            Some("Unsaved content. [S]ubmit+quit  [D]iscard+quit  [C]/Esc continue")
+        );
     }
 
     #[test]
@@ -2069,22 +2075,14 @@ mod tests {
         let action = widget.handle_key_event(key(KeyCode::Char('l')));
         assert_eq!(action, WidgetAction::None);
         assert_eq!(widget.page_mode(), PageMode::Composer);
-        assert_eq!(widget.status_message(), Some("Tmux prefix timed out."));
+        assert_eq!(widget.status_message(), None);
     }
 
     #[test]
-    fn wq_failure_prompt_can_cancel_or_quit() {
+    fn wq_failure_updates_status_message_without_popup() {
         let mut widget = ChatWidget::new();
         widget.on_wq_submission_failed("network error");
-        assert!(widget.wq_failure_prompt().is_some());
-
-        let cancel = widget.handle_key_event(key(KeyCode::Char('c')));
-        assert_eq!(cancel, WidgetAction::None);
-        assert!(widget.wq_failure_prompt().is_none());
-
-        widget.on_wq_submission_failed("network error");
-        let quit = widget.handle_key_event(key(KeyCode::Enter));
-        assert_eq!(quit, WidgetAction::Quit);
+        assert_eq!(widget.status_message(), Some("Save failed: network error"));
     }
 
     #[test]
@@ -2107,6 +2105,61 @@ mod tests {
 
         let second = widget.handle_key_event(key(KeyCode::Esc));
         assert_eq!(second, WidgetAction::Quit);
+    }
+
+    #[test]
+    fn esc_twice_with_unsaved_content_starts_status_row_confirmation() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('x')));
+
+        let first = widget.handle_key_event(key(KeyCode::Esc));
+        assert_eq!(first, WidgetAction::None);
+        assert!(widget.quit_confirmation_pending());
+
+        let second = widget.handle_key_event(key(KeyCode::Esc));
+        assert_eq!(second, WidgetAction::None);
+        assert_eq!(
+            widget.status_message(),
+            Some("Unsaved content. [S]ubmit+quit  [D]iscard+quit  [C]/Esc continue")
+        );
+    }
+
+    #[test]
+    fn status_row_confirmation_discard_quits() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('x')));
+        widget.handle_key_event(key(KeyCode::Esc));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(shift_char('D'));
+        assert_eq!(action, WidgetAction::Quit);
+    }
+
+    #[test]
+    fn status_row_confirmation_submit_emits_before_quit_action() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('x')));
+        widget.handle_key_event(key(KeyCode::Esc));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(shift_char('S'));
+        assert_eq!(
+            action,
+            WidgetAction::SubmitCreateBeforeQuit("x".to_string())
+        );
+    }
+
+    #[test]
+    fn status_row_confirmation_cancel_keeps_editing() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('x')));
+        widget.handle_key_event(key(KeyCode::Esc));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(key(KeyCode::Esc));
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.status_message(), None);
+        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "x");
     }
 
     fn history_texts(widget: &ChatWidget) -> Vec<String> {

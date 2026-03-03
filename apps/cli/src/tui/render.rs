@@ -31,7 +31,6 @@ pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget) {
 
     render_help_overlay(frame, area, widget.help_overlay());
     render_delete_confirmation(frame, area, widget.delete_confirmation_text());
-    render_wq_failure_prompt(frame, area, widget.wq_failure_prompt());
 }
 
 fn render_composer_page(frame: &mut Frame<'_>, area: Rect, widget: &mut ChatWidget) {
@@ -449,7 +448,7 @@ fn help_overlay_content(context: HelpOverlayContext) -> &'static str {
         HelpOverlayContext::ComposerNormal => {
             "Composer NORMAL\n\
 Ctrl+b w/s submit | Ctrl+b W submit+quit on success\n\
-Ctrl+b q quit if clean | Ctrl+b Q force quit\n\
+Ctrl+b q/Q quit (confirm if unsaved)\n\
 Ctrl+b l open memo list | Ctrl+b p toggle split list\n\
 h/j/k/l move | b 0 $ | x dd edit\n\
 i/a/I/A/o/O enter insert actions\n\
@@ -472,37 +471,6 @@ Ctrl+b q quit program\n\
 ? / Esc / q close help"
         }
     }
-}
-
-fn render_wq_failure_prompt(frame: &mut Frame<'_>, area: Rect, message: Option<&str>) {
-    let Some(message) = message else {
-        return;
-    };
-    if area.width < 40 || area.height < 7 {
-        return;
-    }
-
-    let popup_width = area.width.min(84);
-    let popup_height = 7;
-    let popup = Rect {
-        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
-        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
-        width: popup_width,
-        height: popup_height,
-    };
-
-    let content = format!(
-        "Save failed after 3 attempts.\n{message}\nEnter/Q quit without submit | Esc/C continue editing"
-    );
-
-    frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(content)
-            .block(Block::default().borders(Borders::ALL).title("Save Failed"))
-            .style(Style::default())
-            .wrap(Wrap { trim: true }),
-        popup,
-    );
 }
 
 fn truncate_with_ellipsis(input: &str, limit: usize) -> String {

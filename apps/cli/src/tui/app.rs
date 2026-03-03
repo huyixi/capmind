@@ -15,6 +15,10 @@ use tokio::time::sleep;
 use crate::auth::{authenticate_with_stored_token, login_interactive};
 use crate::cli::resolve_text;
 use crate::error::AppError;
+use crate::pending_submit_cache_store::{
+    PendingSubmitCacheItem, append_dedup as append_pending_submit_cache,
+    load as load_pending_submit_cache, save as save_pending_submit_cache,
+};
 use crate::submission::submit_memo;
 use crate::supabase::{
     DeleteMemoOutcome, InsertedMemo, RecentMemo, Session, SupabaseClient, UpdateMemoOutcome,
@@ -65,7 +69,10 @@ enum BackgroundEvent {
         inserted: InsertedMemo,
     },
     WqEditSuccess(EditSubmitSuccess),
-    WqFailed(String),
+    WqFailed {
+        message: String,
+        text: String,
+    },
 }
 
 enum EditSubmitSuccess {
@@ -122,6 +129,7 @@ impl<'a> ComposeApp<'a> {
     pub async fn run(mut self) -> Result<(), AppError> {
         let mut terminal = TerminalSession::new()?;
         let (background_tx, mut background_rx) = mpsc::unbounded_channel();
+        self.start_pending_submit_replay();
         self.start_history_loader(background_tx.clone());
 
         loop {
@@ -275,6 +283,13 @@ impl<'a> ComposeApp<'a> {
         });
     }
 
+    fn start_pending_submit_replay(&self) {
+        let client = (*self.client).clone();
+        tokio::spawn(async move {
+            run_pending_submit_replay(client).await;
+        });
+    }
+
     fn start_wq_create_submission(&self, tx: UnboundedSender<BackgroundEvent>, text: String) {
         let client = (*self.client).clone();
         tokio::spawn(async move {
@@ -386,8 +401,26 @@ impl<'a> ComposeApp<'a> {
                     }
                     should_quit = true;
                 }
-                BackgroundEvent::WqFailed(message) => {
+                BackgroundEvent::WqFailed { message, text } => {
                     self.widget.on_wq_submission_failed(&message);
+                    if text.is_empty() {
+                        self.widget.on_wq_submission_status(
+                            "Save failed before cache step. Continue editing.",
+                        );
+                        continue;
+                    }
+                    match append_pending_submit_cache(&text) {
+                        Ok(()) => {
+                            self.widget
+                                .on_wq_submission_status("Save failed; cached for next launch.");
+                            should_quit = true;
+                        }
+                        Err(err) => {
+                            self.widget.on_wq_submission_status(&format!(
+                                "Save failed and cache write failed: {err}"
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -643,7 +676,10 @@ async fn run_wq_create_submission(
     let normalized = match resolve_text(Some(text)) {
         Ok(value) => value,
         Err(err) => {
-            let _ = tx.send(BackgroundEvent::WqFailed(err.to_string()));
+            let _ = tx.send(BackgroundEvent::WqFailed {
+                message: err.to_string(),
+                text: String::new(),
+            });
             return;
         }
     };
@@ -659,7 +695,10 @@ async fn run_wq_create_submission(
             }
             Err(err) => {
                 if attempt >= WQ_MAX_ATTEMPTS {
-                    let _ = tx.send(BackgroundEvent::WqFailed(err.to_string()));
+                    let _ = tx.send(BackgroundEvent::WqFailed {
+                        message: err.to_string(),
+                        text: normalized,
+                    });
                     return;
                 }
 
@@ -682,7 +721,10 @@ async fn run_wq_edit_submission(
     let normalized = match resolve_text(Some(text)) {
         Ok(value) => value,
         Err(err) => {
-            let _ = tx.send(BackgroundEvent::WqFailed(err.to_string()));
+            let _ = tx.send(BackgroundEvent::WqFailed {
+                message: err.to_string(),
+                text: String::new(),
+            });
             return;
         }
     };
@@ -695,7 +737,10 @@ async fn run_wq_edit_submission(
             }
             Err(err) => {
                 if attempt >= WQ_MAX_ATTEMPTS {
-                    let _ = tx.send(BackgroundEvent::WqFailed(err.to_string()));
+                    let _ = tx.send(BackgroundEvent::WqFailed {
+                        message: err.to_string(),
+                        text: normalized,
+                    });
                     return;
                 }
 
@@ -705,6 +750,53 @@ async fn run_wq_edit_submission(
                 sleep(wq_retry_delay(attempt)).await;
             }
         }
+    }
+}
+
+async fn run_pending_submit_replay(client: SupabaseClient) {
+    let cached_items = match load_pending_submit_cache() {
+        Ok(items) => items,
+        Err(err) => {
+            eprintln!("Warning: failed to read pending submit cache: {err}");
+            return;
+        }
+    };
+
+    if cached_items.is_empty() {
+        return;
+    }
+
+    let session = match authenticate_with_stored_token(&client).await {
+        Ok(session) => session,
+        Err(_) => {
+            return;
+        }
+    };
+
+    let mut failed_items: Vec<PendingSubmitCacheItem> = Vec::new();
+    for item in cached_items {
+        let normalized = match resolve_text(Some(item.text.clone())) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!(
+                    "Warning: dropping invalid pending submit item {}: {err}",
+                    item.id
+                );
+                continue;
+            }
+        };
+
+        if let Err(err) = client.insert_memo(&session.access_token, &normalized).await {
+            eprintln!(
+                "Warning: replay submit failed for cached item {}: {err}",
+                item.id
+            );
+            failed_items.push(item);
+        }
+    }
+
+    if let Err(err) = save_pending_submit_cache(&failed_items) {
+        eprintln!("Warning: failed to persist pending submit cache replay result: {err}");
     }
 }
 
