@@ -9,6 +9,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/cli-auto-release.yml"
+      - ".github/workflows/cli-homebrew-tap-sync.yml"
       - ".github/release-please-config.json"
       - ".release-please-manifest.json"
 
@@ -25,7 +26,7 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release.outputs.releases_created }}
+      release_created: ${{ steps.release.outputs['apps/cli--release_created'] }}
       tag_name: ${{ steps.release.outputs['apps/cli--tag_name'] }}
     steps:
       - name: Run release-please
@@ -101,3 +102,14 @@ jobs:
           tag_name: ${{ needs.release-please.outputs.tag_name }}
           files: release/**/*
           fail_on_unmatched_files: true
+
+  sync-homebrew-tap:
+    if: needs.release-please.outputs.release_created == 'true'
+    needs: [release-please, publish]
+    uses: ./.github/workflows/cli-homebrew-tap-sync.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+      tap_repo: ${{ vars.HOMEBREW_TAP_REPO }}
+      formula_path: ${{ vars.HOMEBREW_FORMULA_PATH }}
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
