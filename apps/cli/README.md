@@ -181,3 +181,14 @@ replacement fails.
   - Ensure the release includes `SHA256SUMS` and the matching platform binary.
 - `Update failed: move current binary to backup`:
   - Current executable path is not writable. Re-run with proper permissions.
+
+## Release automation (maintainers)
+
+- CLI releases are automated by GitHub Actions on `main` for CLI-related changes.
+- Versioning/changelog are managed by release-please from commit history.
+- Use Conventional Commits for intended version bumps:
+  - `fix:` -> patch release
+  - `feat:` -> minor release
+  - `feat!:` or `BREAKING CHANGE:` -> major release
+- Published GitHub Releases must include `capmind-Linux`, `capmind-macOS`,
+  `capmind-Windows.exe`, and `SHA256SUMS` for `cap update`.

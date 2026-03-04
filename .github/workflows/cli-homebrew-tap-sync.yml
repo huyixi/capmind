@@ -1,9 +1,6 @@
 name: cli-homebrew-tap-sync
 
 on:
-  push:
-    tags:
-      - "capmind-v*"
   release:
     types: [published]
   workflow_dispatch:
@@ -28,8 +25,6 @@ jobs:
   sync-homebrew-tap:
     if: |
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' &&
-       startsWith(github.ref_name, 'capmind-v')) ||
       (github.event_name == 'release' &&
        startsWith(github.event.release.tag_name, 'capmind-v') &&
        github.event.release.draft == false &&
@@ -37,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SOURCE_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
       TAP_REPO: ${{ github.event_name == 'workflow_dispatch' && inputs.tap_repo || vars.HOMEBREW_TAP_REPO }}
       FORMULA_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.formula_path || vars.HOMEBREW_FORMULA_PATH }}
 
