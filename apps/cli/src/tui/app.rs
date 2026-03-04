@@ -19,6 +19,7 @@ use crate::pending_submit_cache_store::{
     PendingSubmitCacheItem, append_dedup as append_pending_submit_cache,
     load as load_pending_submit_cache, save as save_pending_submit_cache,
 };
+use crate::session_store::load_cached_user_id;
 use crate::submission::submit_memo;
 use crate::supabase::{
     DeleteMemoOutcome, InsertedMemo, RecentMemo, Session, SupabaseClient, UpdateMemoOutcome,
@@ -211,12 +212,39 @@ impl<'a> ComposeApp<'a> {
         let client = (*self.client).clone();
         let cache_enabled = self.memo_list_cache_enabled;
         tokio::spawn(async move {
+            if cache_enabled {
+                match load_cached_user_id() {
+                    Ok(Some(user_id)) => match load_for_user(&user_id) {
+                        Ok(Some(cached_memos)) => {
+                            let _ = tx.send(BackgroundEvent::InitialHistoryLoaded {
+                                memos: cached_memos,
+                                from_cache: true,
+                            });
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            eprintln!("Warning: failed to read memo list cache: {err}");
+                        }
+                    },
+                    Ok(None) => {}
+                    Err(err) => {
+                        eprintln!("Warning: failed to read cached user id: {err}");
+                    }
+                }
+            }
+
             let session = match authenticate_with_stored_token(&client).await {
                 Ok(session) => session,
                 Err(err) => {
-                    let _ = tx.send(BackgroundEvent::InitialHistoryLoadFailed {
-                        message: format_history_load_error(&err),
-                    });
+                    if cache_enabled {
+                        let _ = tx.send(BackgroundEvent::RefreshHistoryFailed(format!(
+                            "Refresh memo list failed: {err}"
+                        )));
+                    } else {
+                        let _ = tx.send(BackgroundEvent::InitialHistoryLoadFailed {
+                            message: format_history_load_error(&err),
+                        });
+                    }
                     return;
                 }
             };
@@ -232,21 +260,6 @@ impl<'a> ComposeApp<'a> {
             } else {
                 None
             };
-
-            if cache_enabled && let Some(user_id) = cache_user_id.as_deref() {
-                match load_for_user(user_id) {
-                    Ok(Some(cached_memos)) => {
-                        let _ = tx.send(BackgroundEvent::InitialHistoryLoaded {
-                            memos: cached_memos,
-                            from_cache: true,
-                        });
-                    }
-                    Ok(None) => {}
-                    Err(err) => {
-                        eprintln!("Warning: failed to read memo list cache: {err}");
-                    }
-                }
-            }
 
             let event = match client.list_recent_memos(&session.access_token).await {
                 Ok(memos) => {
