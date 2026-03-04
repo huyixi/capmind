@@ -1,5 +1,6 @@
 mod auth;
 mod cli;
+mod doctor;
 mod env_loader;
 mod error;
 mod export_selector;
@@ -18,6 +19,7 @@ use cli::{Cli, Commands, resolve_text, rewrite_shortcut_args};
 use std::io::{self, IsTerminal};
 
 use crate::auth::{authenticate_with_stored_token, login_interactive, logout};
+use crate::doctor::{render_doctor_json, render_doctor_text, run_doctor};
 use crate::export_selector::prompt_export_range;
 use crate::memo_export::{
     ExportRangePreset, build_export_payload, date_range_for_preset, next_export_file_path,
@@ -96,6 +98,14 @@ async fn run() -> Result<(), error::AppError> {
         Commands::List => {
             let client = SupabaseClient::from_env()?;
             tui::run_list(&client).await?;
+        }
+        Commands::Doctor(args) => {
+            let report = run_doctor(&args).await?;
+            if args.json {
+                println!("{}", render_doctor_json(&report)?);
+            } else {
+                println!("{}", render_doctor_text(&report));
+            }
         }
         Commands::Update(args) => {
             let result = run_update(&args).await?;

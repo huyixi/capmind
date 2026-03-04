@@ -18,6 +18,7 @@ pub enum Commands {
     Logout,
     Compose,
     List,
+    Doctor(DoctorArgs),
     #[command(name = "update", alias = "self-update")]
     Update(UpdateArgs),
 }
@@ -46,6 +47,12 @@ pub struct UpdateArgs {
     pub force_standalone: bool,
 }
 
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    #[arg(long, help = "Output doctor report as JSON.")]
+    pub json: bool,
+}
+
 pub fn rewrite_shortcut_args<I>(args: I) -> Vec<String>
 where
     I: IntoIterator<Item = String>,
@@ -72,6 +79,7 @@ where
             | "help"
             | "compose"
             | "list"
+            | "doctor"
             | "update"
             | "self-update"
     ) {
@@ -204,6 +212,13 @@ mod tests {
         let input = vec!["cap".to_string(), "update".to_string()];
         let output = rewrite_shortcut_args(input);
         assert_eq!(output, vec!["cap", "update"]);
+    }
+
+    #[test]
+    fn does_not_rewrite_doctor_subcommand() {
+        let input = vec!["cap".to_string(), "doctor".to_string()];
+        let output = rewrite_shortcut_args(input);
+        assert_eq!(output, vec!["cap", "doctor"]);
     }
 
     #[test]
