@@ -146,6 +146,27 @@ cargo run -- update --version 0.2.1
 verifies SHA-256 before replacing the executable, and rolls back automatically if
 replacement fails.
 
+### 9) Diagnose local install/session/cache state
+
+Run doctor in text mode:
+
+```bash
+cargo run -- doctor
+```
+
+Run doctor in JSON mode:
+
+```bash
+cargo run -- doctor --json
+```
+
+`doctor` is read-only and reports:
+- install source and current version detection
+- latest release tag lookup status
+- Homebrew availability/formula status
+- session file and cache file health
+- actionable findings for common upgrade/auth/cache issues
+
 ## Auth/session behavior
 
 - CLI first attempts refresh-token login from `~/.capmind/auth.json`.
