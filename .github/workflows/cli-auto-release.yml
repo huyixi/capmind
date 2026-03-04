@@ -1,50 +1,54 @@
-name: cli-release
+name: cli-auto-release
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag to build/publish (for example: capmind-v0.4.1)"
-        required: true
-        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/cli/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/cli-auto-release.yml"
+      - ".github/release-please-config.json"
+      - ".release-please-manifest.json"
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: cli-auto-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release.outputs['apps/cli--tag_name'] }}
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: .github/release-please-config.json
+          manifest-file: .release-please-manifest.json
+
   build:
+    if: needs.release-please.outputs.release_created == 'true'
+    needs: release-please
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
-
-      - name: Verify tag format and Cargo version
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${{ inputs.tag }}" != capmind-v* ]]; then
-            echo "::error::Tag must start with capmind-v. Got: ${{ inputs.tag }}"
-            exit 1
-          fi
-
-          tag_version="${{ inputs.tag }}"
-          tag_version="${tag_version#capmind-v}"
-          cargo_version=$(grep -m1 '^version = "' apps/cli/Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
-          if [[ -z "${cargo_version}" ]]; then
-            echo "::error::Could not parse version from apps/cli/Cargo.toml"
-            exit 1
-          fi
-          if [[ "${tag_version}" != "${cargo_version}" ]]; then
-            echo "::error::Tag version (${tag_version}) does not match apps/cli/Cargo.toml version (${cargo_version})."
-            exit 1
-          fi
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -72,8 +76,11 @@ jobs:
           path: release/*
 
   publish:
-    needs: build
+    if: needs.release-please.outputs.release_created == 'true'
+    needs: [release-please, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Download artifacts
@@ -88,10 +95,9 @@ jobs:
           cd release
           ls -1 capmind-* | sort | xargs sha256sum > SHA256SUMS
 
-      - name: Publish GitHub Release
+      - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag }}
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
           files: release/**/*
-          generate_release_notes: true
           fail_on_unmatched_files: true
