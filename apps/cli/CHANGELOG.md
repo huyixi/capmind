@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/huyixi/capmind/compare/capmind-v0.5.0...capmind-v0.6.0) (2026-03-04)
+
+
+### Features
+
+* **cli:** add cap doctor diagnostics command ([#11](https://github.com/huyixi/capmind/issues/11)) ([a08be51](https://github.com/huyixi/capmind/commit/a08be512e583ebfeed3541f3e740388d328d1d62))
+
 ## [0.5.0](https://github.com/huyixi/capmind/compare/capmind-v0.4.0...capmind-v0.5.0) (2026-03-04)
 
 
