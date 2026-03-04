@@ -1264,8 +1264,8 @@ fn is_help_key(key_event: KeyEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        AUTH_REQUIRED_SAVE_PROMPT, ChatWidget, HelpOverlayContext, PageMode, PendingSubmitAction,
-        PREFIX_TIMEOUT, WidgetAction,
+        AUTH_REQUIRED_SAVE_PROMPT, ChatWidget, HelpOverlayContext, PREFIX_TIMEOUT, PageMode,
+        PendingSubmitAction, WidgetAction,
     };
     use crate::supabase::RecentMemo;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

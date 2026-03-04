@@ -7,6 +7,7 @@
     "build": "cargo build",
     "lint": "cargo clippy --all-targets -- -D warnings",
     "test": "cargo test",
-    "fmt": "cargo fmt --all -- --check"
+    "fmt": "cargo fmt --all",
+    "fmt:check": "cargo fmt --all -- --check"
   }
 }
