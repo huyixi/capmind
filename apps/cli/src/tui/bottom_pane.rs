@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyEvent, KeyEventKind};
 
 use super::composer::{Composer, ComposerAction};
 
@@ -7,7 +7,6 @@ pub enum InputResult {
     None,
     Submitted(String),
     Cancelled,
-    SwitchFocusToHistory,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -27,11 +26,6 @@ impl BottomPane {
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         if key_event.kind != KeyEventKind::Press {
             return InputResult::None;
-        }
-
-        match key_event.code {
-            KeyCode::Tab | KeyCode::BackTab => return InputResult::SwitchFocusToHistory,
-            _ => {}
         }
 
         match self.composer.handle_key_event(key_event) {
