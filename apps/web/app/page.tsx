@@ -1,7 +1,11 @@
 import { MemoContainer } from "@/components/memo-container";
+import { createServerClient } from "@/lib/supabase/server";
 
-export const dynamic = "force-static";
+export default async function Home() {
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-export default function Home() {
-  return <MemoContainer initialUser={null} />;
+  return <MemoContainer initialUser={user ?? null} />;
 }

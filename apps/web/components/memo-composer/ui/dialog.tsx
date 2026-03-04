@@ -46,6 +46,7 @@ export function MemoComposerDialog(props: MemoComposerProps) {
           onImageSelect={composer.handleImageSelect}
           onRemoveExistingImage={composer.handleRemoveExistingImage}
           onRemoveImage={composer.handleRemoveImage}
+          onTextareaFocus={composer.handleTextareaFocus}
         />
       </DialogContent>
     </Dialog>

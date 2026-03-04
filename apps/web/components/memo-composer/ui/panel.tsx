@@ -19,6 +19,8 @@ export interface MemoComposerPanelProps {
   }) => Promise<MemoComposerSubmitResult>;
   onDraftTextChange?: (value: string) => void;
   onDraftClear?: () => void;
+  onComposerFocus?: () => void;
+  onComposerFirstKeystroke?: () => void;
 }
 
 export function MemoComposerPanel({
@@ -32,6 +34,8 @@ export function MemoComposerPanel({
   onSubmit,
   onDraftTextChange,
   onDraftClear,
+  onComposerFocus,
+  onComposerFirstKeystroke,
 }: MemoComposerPanelProps) {
   const isEditMode = mode === "edit";
 
@@ -46,6 +50,8 @@ export function MemoComposerPanel({
       allowImages={isEditMode ? canEditImages : true}
       onDraftTextChange={isEditMode ? undefined : onDraftTextChange}
       onDraftClear={isEditMode ? undefined : onDraftClear}
+      onComposerFocus={onComposerFocus}
+      onComposerFirstKeystroke={onComposerFirstKeystroke}
       hasFallbackImages={
         isEditMode &&
         !canEditImages &&
