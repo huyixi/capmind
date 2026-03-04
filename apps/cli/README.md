@@ -156,7 +156,8 @@ replacement fails.
   - `L`: run interactive login flow and retry submit
   - `S`: keep current text as draft in editor (no publish)
   - `C`/`Esc`: cancel prompt and continue editing
-- Successful login stores refresh token to `~/.capmind/auth.json` (field: `refresh_token`).
+- Successful login stores session data to `~/.capmind/auth.json`:
+  `refresh_token`, `access_token`, `access_token_expires_at`, `user_id`.
 - Email/password are only entered interactively in `cap login`.
 
 ## Error handling

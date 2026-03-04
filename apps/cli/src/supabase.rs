@@ -1,6 +1,6 @@
 use base64::Engine;
 use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -642,6 +642,43 @@ async fn send_with_network_retry(
 }
 
 pub(crate) fn extract_user_id_from_access_token(access_token: &str) -> Result<String, AppError> {
+    let value = parse_access_token_payload(access_token)?;
+    let sub = value
+        .get("sub")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::Auth("Access token payload missing `sub`".to_string()))?;
+
+    Ok(sub.to_string())
+}
+
+pub(crate) fn extract_expires_at_from_access_token(
+    access_token: &str,
+) -> Result<DateTime<Utc>, AppError> {
+    let value = parse_access_token_payload(access_token)?;
+    let exp = value
+        .get("exp")
+        .ok_or_else(|| AppError::Auth("Access token payload missing `exp`".to_string()))?;
+
+    let exp_seconds = match exp {
+        serde_json::Value::Number(v) => v.as_i64().ok_or_else(|| {
+            AppError::Auth("Access token payload `exp` is not a valid integer".to_string())
+        })?,
+        serde_json::Value::String(v) => v.parse::<i64>().map_err(|_| {
+            AppError::Auth("Access token payload `exp` is not a valid integer".to_string())
+        })?,
+        _ => {
+            return Err(AppError::Auth(
+                "Access token payload `exp` is not a valid integer".to_string(),
+            ));
+        }
+    };
+
+    Utc.timestamp_opt(exp_seconds, 0)
+        .single()
+        .ok_or_else(|| AppError::Auth("Access token payload `exp` is out of range".to_string()))
+}
+
+fn parse_access_token_payload(access_token: &str) -> Result<serde_json::Value, AppError> {
     let mut parts = access_token.split('.');
     let _header = parts
         .next()
@@ -661,14 +698,8 @@ pub(crate) fn extract_user_id_from_access_token(access_token: &str) -> Result<St
         })
         .map_err(|err| AppError::Auth(format!("Failed to decode access token payload: {err}")))?;
 
-    let value: serde_json::Value = serde_json::from_slice(&decoded)
-        .map_err(|err| AppError::Auth(format!("Invalid access token JSON payload: {err}")))?;
-    let sub = value
-        .get("sub")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Auth("Access token payload missing `sub`".to_string()))?;
-
-    Ok(sub.to_string())
+    serde_json::from_slice(&decoded)
+        .map_err(|err| AppError::Auth(format!("Invalid access token JSON payload: {err}")))
 }
 
 fn row_to_recent_memo(row: MemoRowResponse) -> Result<RecentMemo, AppError> {
@@ -699,14 +730,29 @@ fn normalize_version_value(value: &serde_json::Value) -> Result<String, AppError
 mod tests {
     use super::{
         DEFAULT_SUPABASE_ANON_KEY, DEFAULT_SUPABASE_URL, SupabaseClient,
-        extract_user_id_from_access_token, should_fetch_next_page,
+        extract_expires_at_from_access_token, extract_user_id_from_access_token,
+        should_fetch_next_page,
     };
+    use chrono::{TimeZone, Utc};
 
     #[test]
     fn extract_sub_from_jwt_payload() {
         let token = "a.eyJzdWIiOiIxMjM0In0.b";
         let user_id = extract_user_id_from_access_token(token).expect("should parse sub");
         assert_eq!(user_id, "1234");
+    }
+
+    #[test]
+    fn extract_exp_from_jwt_payload() {
+        let token = "a.eyJleHAiOjE3MzU2ODk2MDB9.b";
+        let expires_at =
+            extract_expires_at_from_access_token(token).expect("should parse exp timestamp");
+        assert_eq!(
+            expires_at,
+            Utc.timestamp_opt(1_735_689_600, 0)
+                .single()
+                .expect("valid timestamp")
+        );
     }
 
     #[test]

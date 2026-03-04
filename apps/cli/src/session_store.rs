@@ -5,6 +5,8 @@ const CAPMIND_DIR_NAME: &str = ".capmind";
 const SESSION_FILE_NAME: &str = "auth.json";
 const REFRESH_TOKEN_KEY: &str = "refresh_token";
 const USER_ID_KEY: &str = "user_id";
+const ACCESS_TOKEN_KEY: &str = "access_token";
+const ACCESS_TOKEN_EXPIRES_AT_KEY: &str = "access_token_expires_at";
 
 pub fn load_refresh_token() -> Result<Option<String>, String> {
     load_session_field(REFRESH_TOKEN_KEY)
@@ -14,7 +16,20 @@ pub fn load_cached_user_id() -> Result<Option<String>, String> {
     load_session_field(USER_ID_KEY)
 }
 
-pub fn save_session(refresh_token: &str, user_id: Option<&str>) -> Result<(), String> {
+pub fn load_access_token() -> Result<Option<String>, String> {
+    load_session_field(ACCESS_TOKEN_KEY)
+}
+
+pub fn load_access_token_expires_at() -> Result<Option<String>, String> {
+    load_session_field(ACCESS_TOKEN_EXPIRES_AT_KEY)
+}
+
+pub fn save_session(
+    refresh_token: &str,
+    access_token: Option<&str>,
+    access_token_expires_at: Option<&str>,
+    user_id: Option<&str>,
+) -> Result<(), String> {
     let path = session_file_path()?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)
@@ -39,6 +54,28 @@ pub fn save_session(refresh_token: &str, user_id: Option<&str>) -> Result<(), St
         REFRESH_TOKEN_KEY.to_string(),
         serde_json::Value::String(refresh_token.to_string()),
     );
+    if let Some(access_token) = access_token
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        data.insert(
+            ACCESS_TOKEN_KEY.to_string(),
+            serde_json::Value::String(access_token.to_string()),
+        );
+    } else {
+        data.remove(ACCESS_TOKEN_KEY);
+    }
+    if let Some(expires_at) = access_token_expires_at
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        data.insert(
+            ACCESS_TOKEN_EXPIRES_AT_KEY.to_string(),
+            serde_json::Value::String(expires_at.to_string()),
+        );
+    } else {
+        data.remove(ACCESS_TOKEN_EXPIRES_AT_KEY);
+    }
     if let Some(user_id) = user_id.map(str::trim).filter(|value| !value.is_empty()) {
         data.insert(
             USER_ID_KEY.to_string(),
