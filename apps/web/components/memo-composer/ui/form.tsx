@@ -31,6 +31,7 @@ export interface MemoComposerFormProps {
   onImageSelect: (event: ChangeEvent<HTMLInputElement>) => void;
   onRemoveExistingImage: (index: number) => void;
   onRemoveImage: (index: number) => void;
+  onTextareaFocus?: () => void;
 }
 
 export function MemoComposerForm({
@@ -57,6 +58,7 @@ export function MemoComposerForm({
   onImageSelect,
   onRemoveExistingImage,
   onRemoveImage,
+  onTextareaFocus,
 }: MemoComposerFormProps) {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col bg-white">
@@ -120,6 +122,7 @@ export function MemoComposerForm({
               value={text}
               onChange={onTextChange}
               onKeyDown={onKeyDown}
+              onFocus={onTextareaFocus}
               placeholder={placeholder}
               wrap="soft"
               style={{ fieldSizing: "fixed" }}

@@ -27,4 +27,6 @@ export interface MemoComposerProps {
   title?: string;
   onDraftTextChange?: (value: string) => void;
   onDraftClear?: () => void;
+  onComposerFocus?: () => void;
+  onComposerFirstKeystroke?: () => void;
 }

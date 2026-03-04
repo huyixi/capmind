@@ -27,6 +27,8 @@ export function useMemoComposer({
   title,
   onDraftTextChange,
   onDraftClear,
+  onComposerFocus,
+  onComposerFirstKeystroke,
 }: MemoComposerProps) {
   const [text, setText] = useState(initialText);
   const [images, setImages] = useState<File[]>([]);
@@ -41,6 +43,8 @@ export function useMemoComposer({
   const previewsRef = useRef<string[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const hasReportedFocusRef = useRef(false);
+  const hasReportedFirstKeystrokeRef = useRef(false);
   const wasOpenRef = useRef(open);
   const lastModeRef = useRef(mode);
   const canManageImages = allowImages ?? true;
@@ -119,6 +123,18 @@ export function useMemoComposer({
       onDraftClear?.();
     }
   }, [clearPreviews, mode, onDraftClear, resetFileInput]);
+
+  const reportComposerFocus = useCallback(() => {
+    if (hasReportedFocusRef.current) return;
+    hasReportedFocusRef.current = true;
+    onComposerFocus?.();
+  }, [onComposerFocus]);
+
+  const reportFirstKeystroke = useCallback(() => {
+    if (hasReportedFirstKeystrokeRef.current) return;
+    hasReportedFirstKeystrokeRef.current = true;
+    onComposerFirstKeystroke?.();
+  }, [onComposerFirstKeystroke]);
 
   const handleAddImageClick = useCallback(() => {
     fileInputRef.current?.click();
@@ -216,11 +232,12 @@ export function useMemoComposer({
   const handleTextChange = useCallback(
     (event: ChangeEvent<HTMLTextAreaElement>) => {
       const nextValue = event.target.value;
+      reportFirstKeystroke();
       setText(nextValue);
       setSubmitError(null);
       onDraftTextChange?.(nextValue);
     },
-    [onDraftTextChange],
+    [onDraftTextChange, reportFirstKeystroke],
   );
 
   const handleCancel = useCallback(() => {
@@ -309,14 +326,23 @@ export function useMemoComposer({
     (event: Event) => {
       event.preventDefault();
       const didFocus = focusTextareaToEnd();
+      if (didFocus) {
+        reportComposerFocus();
+      }
       if (!didFocus) {
         requestAnimationFrame(() => {
-          focusTextareaToEnd();
+          if (focusTextareaToEnd()) {
+            reportComposerFocus();
+          }
         });
       }
     },
-    [focusTextareaToEnd],
+    [focusTextareaToEnd, reportComposerFocus],
   );
+
+  const handleTextareaFocus = useCallback(() => {
+    reportComposerFocus();
+  }, [reportComposerFocus]);
 
   const toggleFullscreen = useCallback(() => {
     setIsFullscreen((current) => !current);
@@ -340,6 +366,8 @@ export function useMemoComposer({
       return;
     }
     if (justOpened || modeChanged) {
+      hasReportedFocusRef.current = false;
+      hasReportedFirstKeystrokeRef.current = false;
       setText(initialText);
       setExistingImages(initialImages);
       setSubmitError(null);
@@ -367,7 +395,11 @@ export function useMemoComposer({
         clearPreviews();
         resetFileInput();
       }
-      requestAnimationFrame(focusTextareaToEnd);
+      requestAnimationFrame(() => {
+        if (focusTextareaToEnd()) {
+          reportComposerFocus();
+        }
+      });
     }
     wasOpenRef.current = open;
     lastModeRef.current = mode;
@@ -380,6 +412,7 @@ export function useMemoComposer({
     mode,
     onDraftTextChange,
     open,
+    reportComposerFocus,
     resetFileInput,
   ]);
 
@@ -467,6 +500,7 @@ export function useMemoComposer({
     handleKeyDown,
     handleTextChange,
     handleOpenAutoFocus,
+    handleTextareaFocus,
     toggleFullscreen,
   };
 }

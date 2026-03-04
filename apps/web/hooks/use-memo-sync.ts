@@ -35,6 +35,7 @@ type RemoveMemo = (
 interface UseMemoSyncOptions {
   initialUser: User | null;
   isOnline: boolean;
+  autoSyncEnabled?: boolean;
   mutate: SWRInfiniteKeyedMutator<Memo[][]>;
   resolvePages: (pages: Memo[][] | undefined) => Memo[][];
   replaceMemo: ReplaceMemo;
@@ -48,6 +49,7 @@ interface UseMemoSyncOptions {
 export function useMemoSync({
   initialUser,
   isOnline,
+  autoSyncEnabled = true,
   mutate,
   resolvePages,
   replaceMemo,
@@ -399,6 +401,7 @@ export function useMemoSync({
   ]);
 
   useEffect(() => {
+    if (!autoSyncEnabled) return;
     if (!initialUser || !isOnline) return;
     void (async () => {
       const result = await flushOutbox();
@@ -406,7 +409,7 @@ export function useMemoSync({
         await mutate();
       }
     })();
-  }, [flushOutbox, initialUser, isOnline, mutate]);
+  }, [autoSyncEnabled, flushOutbox, initialUser, isOnline, mutate]);
 
   return { flushOutbox, isSyncing };
 }

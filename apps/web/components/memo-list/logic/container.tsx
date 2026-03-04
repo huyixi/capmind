@@ -36,6 +36,7 @@ export type MemoSearchActions = {
 interface MemoListContainerProps {
   initialUser: User | null;
   initialMemos?: Memo[];
+  backgroundWorkEnabled?: boolean;
   onEdit: (memo: Memo) => void;
   onRegisterComposerActions?: (actions: MemoComposerActions | null) => void;
   onRegisterSearchActions?: (actions: MemoSearchActions | null) => void;
@@ -47,6 +48,7 @@ const MIN_REFRESH_DURATION_MS = 600;
 export function MemoListContainer({
   initialUser,
   initialMemos,
+  backgroundWorkEnabled = true,
   onEdit,
   onRegisterComposerActions,
   onRegisterSearchActions,
@@ -56,9 +58,20 @@ export function MemoListContainer({
   const { resolvedUser } = useResolvedUser(initialUser, supabase);
   const { cachedMemos } = useMemoListCacheSeed(resolvedUser);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [prefetchNextPage, setPrefetchNextPage] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const isOnline = useOnlineStatus();
   const [isTrashView, setIsTrashView] = useState(false);
+
+  useEffect(() => {
+    if (!backgroundWorkEnabled) return;
+    const timer = window.setTimeout(() => {
+      setPrefetchNextPage(true);
+    }, 600);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [backgroundWorkEnabled]);
 
   const {
     memos,
@@ -77,6 +90,7 @@ export function MemoListContainer({
     initialUser: resolvedUser,
     initialMemos: initialMemos ?? cachedMemos,
     enabled: Boolean(resolvedUser),
+    prefetchNextPage,
   });
 
   const trashQuery = useMemo(() => ({ trash: "1" }), []);
@@ -96,6 +110,7 @@ export function MemoListContainer({
     initialUser: resolvedUser,
     query: trashQuery,
     enabled: Boolean(resolvedUser) && isTrashView,
+    prefetchNextPage,
   });
 
   const {
@@ -152,6 +167,7 @@ export function MemoListContainer({
   const { flushOutbox, isSyncing } = useMemoSync({
     initialUser: resolvedUser,
     isOnline,
+    autoSyncEnabled: backgroundWorkEnabled,
     mutate,
     resolvePages,
     replaceMemo,
@@ -287,11 +303,12 @@ export function MemoListContainer({
   const isCacheSeeded = initialMemos === undefined && cachedMemos !== undefined;
   useEffect(() => {
     if (!isCacheSeeded) return;
+    if (!backgroundWorkEnabled) return;
     if (!isOnline) return;
     if (didWarmRefreshRef.current) return;
     didWarmRefreshRef.current = true;
     void mutate();
-  }, [isCacheSeeded, isOnline, mutate]);
+  }, [backgroundWorkEnabled, isCacheSeeded, isOnline, mutate]);
 
   const handleRefresh = useCallback(async () => {
     if (!resolvedUser) return;

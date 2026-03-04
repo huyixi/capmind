@@ -16,6 +16,7 @@ const MemoListContainer = dynamic(
 interface MemoListShellProps {
   initialUser: User | null;
   initialMemos?: Memo[];
+  backgroundWorkEnabled?: boolean;
   onEdit: (memo: Memo) => void;
   onRegisterComposerActions: (actions: MemoComposerActions | null) => void;
   onRegisterSearchActions: (actions: MemoSearchActions | null) => void;
@@ -25,6 +26,7 @@ interface MemoListShellProps {
 export function MemoListShell({
   initialUser,
   initialMemos,
+  backgroundWorkEnabled = true,
   onEdit,
   onRegisterComposerActions,
   onRegisterSearchActions,
@@ -34,6 +36,7 @@ export function MemoListShell({
     <MemoListContainer
       initialUser={initialUser}
       initialMemos={initialMemos}
+      backgroundWorkEnabled={backgroundWorkEnabled}
       onEdit={onEdit}
       onRegisterComposerActions={onRegisterComposerActions}
       onRegisterSearchActions={onRegisterSearchActions}

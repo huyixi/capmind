@@ -1,6 +1,5 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type AuthUser as User } from "@supabase/supabase-js";
 import { useOnlineStatus } from "@/hooks/use-online-status";
@@ -8,47 +7,13 @@ import { useMemoComposerController } from "@/hooks/use-memo-composer-controller"
 import { useMemoShortcuts } from "@/hooks/use-memo-shortcuts";
 import { MemoListShell } from "@/components/memo-list/logic/shell";
 import { MemoCreateButton } from "@/components/memo-create-button";
-import type { MemoComposerPanelProps } from "@/components/memo-composer/ui/panel";
-import { MemoComposerPendingPanel } from "@/components/memo-composer/ui/pending-panel";
+import { MemoComposerPanel } from "@/components/memo-composer/ui/panel";
 import type { MemoSearchActions } from "@/components/memo-list/logic/container";
+import { reportComposerPerfMetric } from "@/lib/composer-performance";
 import type { Memo } from "@/lib/types";
 
 const DRAFT_STORAGE_KEY = "memo-draft:create";
-
-type IdleCallbackWindow = Window & {
-  requestIdleCallback?: (
-    callback: () => void,
-    options?: { timeout: number },
-  ) => number;
-  cancelIdleCallback?: (handle: number) => void;
-};
-
-const loadMemoComposerPanel = () =>
-  import("@/components/memo-composer/ui/panel").then(
-    (mod) => mod.MemoComposerPanel,
-  );
-
-let memoComposerPanelPromise: ReturnType<typeof loadMemoComposerPanel> | null =
-  null;
-
-const ensureMemoComposerPanelLoaded = () => {
-  if (!memoComposerPanelPromise) {
-    memoComposerPanelPromise = loadMemoComposerPanel();
-  }
-  return memoComposerPanelPromise;
-};
-
-const MemoComposerPanel = dynamic<MemoComposerPanelProps>(
-  loadMemoComposerPanel,
-  {
-    ssr: false,
-    loading: () => null,
-  },
-);
-
-const preloadMemoComposerPanel = () => {
-  void ensureMemoComposerPanelLoaded();
-};
+const STARTUP_BACKGROUND_DELAY_MS = 2000;
 
 interface MemoContainerProps {
   initialUser: User | null;
@@ -60,8 +25,11 @@ export function MemoContainer({
   initialMemos,
 }: MemoContainerProps) {
   const [shouldMountMemoList, setShouldMountMemoList] = useState(false);
-  const [isComposerPanelReady, setIsComposerPanelReady] = useState(false);
+  const [isBackgroundWorkEnabled, setIsBackgroundWorkEnabled] = useState(false);
   const isOnline = useOnlineStatus();
+  const composerOpenAtRef = useRef<number | null>(null);
+  const hasReportedComposerFocusRef = useRef(false);
+  const hasReportedFirstKeystrokeRef = useRef(false);
 
   const resolveSubmitUser = useCallback(async (): Promise<User | null> => {
     if (initialUser) return initialUser;
@@ -106,61 +74,93 @@ export function MemoContainer({
   );
 
   useEffect(() => {
-    let cancelled = false;
-    preloadMemoComposerPanel();
-    void ensureMemoComposerPanelLoaded().then(() => {
-      if (cancelled) return;
-      setIsComposerPanelReady(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (!isComposerOpen) {
+      composerOpenAtRef.current = null;
+      hasReportedComposerFocusRef.current = false;
+      hasReportedFirstKeystrokeRef.current = false;
+      return;
+    }
+
+    composerOpenAtRef.current = performance.now();
+    hasReportedComposerFocusRef.current = false;
+    hasReportedFirstKeystrokeRef.current = false;
+  }, [isComposerOpen]);
+
+  const handleComposerFocus = useCallback(() => {
+    if (hasReportedComposerFocusRef.current) return;
+    const openedAt = composerOpenAtRef.current;
+    if (openedAt === null) return;
+    hasReportedComposerFocusRef.current = true;
+    reportComposerPerfMetric(
+      "composer_open_to_focus_ms",
+      performance.now() - openedAt,
+      composerMode,
+    );
+  }, [composerMode]);
+
+  const handleComposerFirstKeystroke = useCallback(() => {
+    if (hasReportedFirstKeystrokeRef.current) return;
+    const openedAt = composerOpenAtRef.current;
+    if (openedAt === null) return;
+    hasReportedFirstKeystrokeRef.current = true;
+    reportComposerPerfMetric(
+      "first_keystroke_ready_ms",
+      performance.now() - openedAt,
+      composerMode,
+    );
+  }, [composerMode]);
 
   useEffect(() => {
-    let cancelled = false;
-    const mountMemoList = () => {
-      if (cancelled) return;
+    const timer = window.setTimeout(() => {
+      setIsBackgroundWorkEnabled(true);
       setShouldMountMemoList(true);
-    };
-    const idleWindow = window as IdleCallbackWindow;
-    if (typeof idleWindow.requestIdleCallback === "function") {
-      const idleHandle = idleWindow.requestIdleCallback(
-        () => {
-          mountMemoList();
-        },
-        { timeout: 1200 },
-      );
-      return () => {
-        cancelled = true;
-        if (typeof idleWindow.cancelIdleCallback === "function") {
-          idleWindow.cancelIdleCallback(idleHandle);
-        }
-      };
-    }
-    const timeoutHandle = window.setTimeout(mountMemoList, 120);
+    }, STARTUP_BACKGROUND_DELAY_MS);
+
     return () => {
-      cancelled = true;
-      window.clearTimeout(timeoutHandle);
+      window.clearTimeout(timer);
     };
   }, []);
 
+  const enableBackgroundWorkNow = useCallback(() => {
+    setIsBackgroundWorkEnabled((current) => {
+      if (current) return current;
+      setShouldMountMemoList(true);
+      return true;
+    });
+  }, []);
+
+  const handleComposerDraftChange = useCallback(
+    (value: string) => {
+      if (value.length > 0) {
+        enableBackgroundWorkNow();
+      }
+      handleDraftTextChange(value);
+    },
+    [enableBackgroundWorkNow, handleDraftTextChange],
+  );
+
   const handleCreateOpen = useCallback(() => {
-    preloadMemoComposerPanel();
     openCreateComposer();
   }, [openCreateComposer]);
 
-  const handleCreateHover = useCallback(() => {
-    preloadMemoComposerPanel();
-  }, []);
-
   const handleEditOpen = useCallback(
     (memo: Memo) => {
-      preloadMemoComposerPanel();
+      enableBackgroundWorkNow();
       void handleEditOpenRaw(memo);
     },
-    [handleEditOpenRaw],
+    [enableBackgroundWorkNow, handleEditOpenRaw],
   );
+
+  useEffect(() => {
+    if (shouldMountMemoList) {
+      return;
+    }
+    const hasCreateDraft = draftText.trim().length > 0;
+    if (hasCreateDraft) {
+      setShouldMountMemoList(true);
+      setIsBackgroundWorkEnabled(true);
+    }
+  }, [draftText, shouldMountMemoList]);
 
   useMemoShortcuts({
     searchActionsRef,
@@ -168,14 +168,13 @@ export function MemoContainer({
     openCreateComposer: handleCreateOpen,
   });
 
-  const showPendingComposer = isComposerOpen && !isComposerPanelReady;
-
   return (
     <div className="min-h-screen flex flex-col bg-background">
       {shouldMountMemoList ? (
         <MemoListShell
           initialUser={initialUser}
           initialMemos={initialMemos}
+          backgroundWorkEnabled={isBackgroundWorkEnabled}
           onEdit={handleEditOpen}
           onRegisterComposerActions={registerComposerActions}
           onRegisterSearchActions={registerSearchActions}
@@ -185,21 +184,8 @@ export function MemoContainer({
 
       <MemoCreateButton
         onClick={handleCreateOpen}
-        onPointerEnter={handleCreateHover}
         srLabel="新建 Memo"
       />
-
-      {showPendingComposer ? (
-        <MemoComposerPendingPanel
-          open={isComposerOpen}
-          mode={composerMode}
-          draftText={draftText}
-          onOpenChange={handleComposerOpenChange}
-          onDraftTextChange={
-            composerMode === "create" ? handleDraftTextChange : undefined
-          }
-        />
-      ) : null}
 
       <MemoComposerPanel
         open={isComposerOpen}
@@ -211,9 +197,11 @@ export function MemoContainer({
         canEditImages={canEditImages}
         draftText={draftText}
         onDraftTextChange={
-          composerMode === "create" ? handleDraftTextChange : undefined
+          composerMode === "create" ? handleComposerDraftChange : undefined
         }
         onDraftClear={composerMode === "create" ? clearDraftText : undefined}
+        onComposerFocus={handleComposerFocus}
+        onComposerFirstKeystroke={handleComposerFirstKeystroke}
       />
     </div>
   );
