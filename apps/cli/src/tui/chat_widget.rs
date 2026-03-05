@@ -17,6 +17,8 @@ const AUTH_REQUIRED_SAVE_PROMPT: &str =
     "Publish requires login. [L]ogin now  [S]ave draft  [C]ancel";
 const QUIT_WITH_UNSAVED_PROMPT: &str =
     "Unsaved content. [S]ubmit+quit  [D]iscard+quit  [C]/Esc continue";
+const COMPOSER_PREFIX_TIP: &str = ":w save  :W save+quit  :q quit  :l list  :? help";
+const MEMO_LIST_PREFIX_TIP: &str = ":n next page  :p prev page  :c composer  :q quit";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingSubmitAction {
@@ -334,12 +336,23 @@ impl ChatWidget {
         if self.auth_required_submit.is_some() {
             return Some(AUTH_REQUIRED_SAVE_PROMPT);
         }
+        if self.prefix_pending {
+            return Some(self.prefix_tip_message());
+        }
         if let Some(expires_at) = self.status_message_expires_at
             && Instant::now() >= expires_at
         {
             return None;
         }
         self.status_message.as_deref()
+    }
+
+    fn prefix_tip_message(&self) -> &'static str {
+        if self.page_mode == PageMode::MemoList {
+            MEMO_LIST_PREFIX_TIP
+        } else {
+            COMPOSER_PREFIX_TIP
+        }
     }
 
     pub fn show_auth_required_submit_prompt(&mut self, submit: PendingSubmitAction) {
@@ -2030,6 +2043,34 @@ mod tests {
         assert_eq!(action, WidgetAction::None);
         assert_eq!(widget.page_mode(), PageMode::Composer);
         assert_eq!(widget.status_message(), None);
+    }
+    #[test]
+    fn typing_prefix_shows_composer_command_tips() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_key_event(key(KeyCode::Char(':')));
+
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(
+            widget.status_message(),
+            Some(":w save  :W save+quit  :q quit  :l list  :? help")
+        );
+    }
+
+    #[test]
+    fn typing_prefix_shows_memo_list_command_tips() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        open_memo_list(&mut widget);
+
+        let action = widget.handle_key_event(key(KeyCode::Char(':')));
+
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(
+            widget.status_message(),
+            Some(":n next page  :p prev page  :c composer  :q quit")
+        );
     }
 
     #[test]
