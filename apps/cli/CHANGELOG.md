@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/huyixi/capmind/compare/capmind-v0.8.0...capmind-v0.8.1) (2026-03-05)
+
+
+### Bug Fixes
+
+* **cli:** use ? for prefix_started_at in chat widget ([#19](https://github.com/huyixi/capmind/issues/19)) ([313feff](https://github.com/huyixi/capmind/commit/313feff91a192a7d882cdde9e7161fe147740e4f))
+
 ## [0.8.0](https://github.com/huyixi/capmind/compare/capmind-v0.7.0...capmind-v0.8.0) (2026-03-05)
 
 
