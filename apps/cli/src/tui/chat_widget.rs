@@ -18,7 +18,7 @@ const AUTH_REQUIRED_SAVE_PROMPT: &str =
 const QUIT_WITH_UNSAVED_PROMPT: &str =
     "Unsaved content. [S]ubmit+quit  [D]iscard+quit  [C]/Esc continue";
 const COMPOSER_PREFIX_TIP: &str =
-    ":w save  :W save+quit  :q quit  :!/:Q force quit  ZZ/ZQ quit  :l list  :? help";
+    ":w save  :wq save+quit  :q quit  :q!/:Q force quit  :W/:! alias  ZZ/ZQ quit  :l list  :? help";
 const MEMO_LIST_PREFIX_TIP: &str = ":n next page  :p prev page  :c composer  :q quit";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +111,7 @@ pub struct ChatWidget {
     composer_dirty: bool,
     prefix_pending: bool,
     prefix_started_at: Option<Instant>,
+    prefix_buffer: String,
 }
 
 impl Default for ChatWidget {
@@ -145,6 +146,7 @@ impl ChatWidget {
             composer_dirty: false,
             prefix_pending: false,
             prefix_started_at: None,
+            prefix_buffer: String::new(),
         }
     }
 
@@ -157,7 +159,9 @@ impl ChatWidget {
             return WidgetAction::Quit;
         }
 
-        self.expire_prefix_if_needed();
+        if let Some(action) = self.expire_prefix_if_needed() {
+            return action;
+        }
 
         if self.quit_submit_confirm_pending {
             self.clear_prefix();
@@ -865,6 +869,7 @@ impl ChatWidget {
     fn begin_prefix(&mut self) {
         self.prefix_pending = true;
         self.prefix_started_at = Some(Instant::now());
+        self.prefix_buffer.clear();
     }
 
     fn can_start_prefix_mode(&self) -> bool {
@@ -878,15 +883,20 @@ impl ChatWidget {
     fn clear_prefix(&mut self) {
         self.prefix_pending = false;
         self.prefix_started_at = None;
+        self.prefix_buffer.clear();
     }
 
-    fn expire_prefix_if_needed(&mut self) {
+    fn expire_prefix_if_needed(&mut self) -> Option<WidgetAction> {
         let Some(started_at) = self.prefix_started_at else {
-            return;
+            return None;
         };
-        if Instant::now().saturating_duration_since(started_at) >= PREFIX_TIMEOUT {
-            self.clear_prefix();
+        if Instant::now().saturating_duration_since(started_at) < PREFIX_TIMEOUT {
+            return None;
         }
+
+        let action = self.flush_prefix_buffer_as_single_char();
+        self.clear_prefix();
+        action
     }
 
     fn handle_prefixed_key(&mut self, key_event: KeyEvent) -> WidgetAction {
@@ -894,28 +904,92 @@ impl ChatWidget {
             self.begin_prefix();
             return WidgetAction::None;
         }
-
-        self.clear_prefix();
-
         if !is_plain_or_shift(key_event.modifiers) {
-            return WidgetAction::None;
+            let action = self.flush_prefix_buffer_as_single_char();
+            self.clear_prefix();
+            return action.unwrap_or(WidgetAction::None);
         }
 
         let KeyCode::Char(c) = key_event.code else {
-            return WidgetAction::None;
+            let action = self.flush_prefix_buffer_as_single_char();
+            self.clear_prefix();
+            return action.unwrap_or(WidgetAction::None);
         };
 
-        if let Some(action) = self.execute_composer_normal_command(c) {
+        if self.prefix_buffer.is_empty() {
+            self.prefix_buffer.push(c);
+            if self.can_extend_to_multi_char_command(c) {
+                return WidgetAction::None;
+            }
+            let action = self.flush_prefix_buffer_as_single_char();
+            self.clear_prefix();
+            return action.unwrap_or(WidgetAction::None);
+        }
+
+        self.prefix_buffer.push(c);
+        if let Some(action) = self.execute_multi_char_prefix_command() {
+            self.clear_prefix();
             return action;
+        }
+
+        let first = self
+            .prefix_buffer
+            .chars()
+            .next()
+            .expect("prefix buffer has one char");
+        self.prefix_buffer.clear();
+        self.prefix_buffer.push(first);
+        let action = self.flush_prefix_buffer_as_single_char();
+        self.clear_prefix();
+        action.unwrap_or(WidgetAction::None)
+    }
+
+    fn can_extend_to_multi_char_command(&self, c: char) -> bool {
+        self.focus == FocusArea::Composer
+            && self.bottom_pane.composer().vim_mode() == VimMode::Normal
+            && matches!(c, 'w' | 'q')
+    }
+
+    fn execute_multi_char_prefix_command(&mut self) -> Option<WidgetAction> {
+        if self.focus != FocusArea::Composer {
+            return None;
+        }
+        if self.bottom_pane.composer().vim_mode() != VimMode::Normal {
+            return None;
+        }
+
+        match self.prefix_buffer.as_str() {
+            "wq" => Some(self.build_submit_action(true)),
+            "q!" => Some(WidgetAction::Quit),
+            _ => None,
+        }
+    }
+
+    fn flush_prefix_buffer_as_single_char(&mut self) -> Option<WidgetAction> {
+        if self.prefix_buffer.len() != 1 {
+            return None;
+        }
+
+        let c = self
+            .prefix_buffer
+            .chars()
+            .next()
+            .expect("prefix buffer has one char");
+        self.execute_single_char_prefixed_command(c)
+    }
+
+    fn execute_single_char_prefixed_command(&mut self, c: char) -> Option<WidgetAction> {
+        if let Some(action) = self.execute_composer_normal_command(c) {
+            return Some(action);
         }
 
         if self.page_mode == PageMode::MemoList
             && let Some(action) = self.handle_memo_list_prefixed_command(c)
         {
-            return action;
+            return Some(action);
         }
 
-        WidgetAction::None
+        None
     }
 
     fn handle_memo_list_prefixed_command(&mut self, c: char) -> Option<WidgetAction> {
@@ -1521,7 +1595,13 @@ mod tests {
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = prefix_char(&mut widget, 'w');
+        widget.handle_key_event(key(KeyCode::Char(':')));
+        let pending = widget.handle_key_event(key(KeyCode::Char('w')));
+        assert_eq!(pending, WidgetAction::None);
+
+        widget.prefix_started_at =
+            Some(Instant::now() - PREFIX_TIMEOUT - Duration::from_millis(10));
+        let action = widget.handle_key_event(key(KeyCode::Char('x')));
         assert_eq!(action, WidgetAction::SubmitCreate("h".to_string()));
     }
 
@@ -1573,7 +1653,13 @@ mod tests {
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = prefix_char(&mut widget, 'q');
+        widget.handle_key_event(key(KeyCode::Char(':')));
+        let pending = widget.handle_key_event(key(KeyCode::Char('q')));
+        assert_eq!(pending, WidgetAction::None);
+
+        widget.prefix_started_at =
+            Some(Instant::now() - PREFIX_TIMEOUT - Duration::from_millis(10));
+        let action = widget.handle_key_event(key(KeyCode::Char('x')));
 
         assert_eq!(action, WidgetAction::None);
         assert_eq!(
@@ -1692,7 +1778,7 @@ mod tests {
         );
 
         widget.handle_key_event(key(KeyCode::Char('?')));
-        let submit = prefix_char(&mut widget, 'w');
+        let submit = prefix_char(&mut widget, 's');
         assert_eq!(submit, WidgetAction::SubmitCreate("h".to_string()));
     }
 
@@ -2036,6 +2122,36 @@ mod tests {
     }
 
     #[test]
+    fn prefix_command_wq_emits_background_submit_action() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('h')));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        widget.handle_key_event(key(KeyCode::Char(':')));
+        widget.handle_key_event(key(KeyCode::Char('w')));
+        let action = widget.handle_key_event(key(KeyCode::Char('q')));
+
+        assert_eq!(
+            action,
+            WidgetAction::SubmitCreateBeforeQuit("h".to_string())
+        );
+        assert!(widget.wq_submission_in_progress());
+    }
+
+    #[test]
+    fn prefix_command_q_bang_force_quits_even_when_dirty() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Char('h')));
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        widget.handle_key_event(key(KeyCode::Char(':')));
+        widget.handle_key_event(key(KeyCode::Char('q')));
+        let action = widget.handle_key_event(key(KeyCode::Char('!')));
+
+        assert_eq!(action, WidgetAction::Quit);
+    }
+
+    #[test]
     fn prefix_command_shift_w_emits_background_submit_action() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Char('h')));
@@ -2073,7 +2189,9 @@ mod tests {
         assert_eq!(action, WidgetAction::None);
         assert_eq!(
             widget.status_message(),
-            Some(":w save  :W save+quit  :q quit  :!/:Q force quit  ZZ/ZQ quit  :l list  :? help")
+            Some(
+                ":w save  :wq save+quit  :q quit  :q!/:Q force quit  :W/:! alias  ZZ/ZQ quit  :l list  :? help"
+            )
         );
     }
 

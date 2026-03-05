@@ -39,13 +39,14 @@ TUI keys:
 - `NORMAL` mode navigation/edit keys: arrows, `h`/`j`/`k`/`l`, `b`, `0`, `$`, `i`/`a`/`I`/`A`/`o`/`O`, `x`, `dd`
 - `NORMAL` mode prefixed commands use `:`:
   - `:w`/`:s`: submit and stay
-  - `:W`: submit in background (up to 3 attempts, retry delays `1s`, `3s`) and quit on success
+  - `:wq`: submit in background (up to 3 attempts, retry delays `1s`, `3s`) and quit on success
   - `:q`: quit (if unsaved, enter submit/discard confirmation)
-  - `:!`/`:Q`: force quit
+  - `:q!`/`:Q`: force quit
+  - `:W`/`:!`: legacy aliases for `:wq`/`:q!`
   - `:l`: open full-page memo list
   - `:?`: open help popup (`?` / `Esc` / `q` to close)
-  - `ZZ`: save+quit (same as `:W`)
-  - `ZQ`: force quit (same as `:!`/`:Q`)
+  - `ZZ`: save+quit (same as `:wq`)
+  - `ZQ`: force quit (same as `:q!`/`:Q`)
 - `↑` / `k` (in History): move selection up
 - `↓` / `j` (in History): move selection down
 - `Enter` (in History): load selected memo into Composer for edit mode
@@ -65,7 +66,7 @@ Submitting from History edit mode updates the original memo by version.
 On version conflict, CLI follows Web behavior: conflict is resolved by backend RPC, keeping server-latest memo and forking your edits into a new memo.
 Deleting from History is a soft delete (`deleted_at` + version bump), aligned with Web behavior.
 On delete conflict, CLI resolves via backend RPC and refreshes that memo from server state instead of hard-removing it.
-If `W` fails after the final retry, the UI prompts to either quit without submit or continue editing.
+If `:wq` (or `:W`) fails after the final retry, the UI prompts to either quit without submit or continue editing.
 
 ### 2) Login (interactive, one-time)
 
