@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Worktree"
+  short_description: "Manage .worktree branches safely"
+  default_prompt: "Use $git-worktree to create, sync, and clean worktrees with branch-to-folder normalization."

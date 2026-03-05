@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Commit"
+  short_description: "Split changes into clean commits"
+  default_prompt: "Use $git-commit to stage intentionally, split mixed diffs, and write Conventional Commit messages."
