@@ -15,7 +15,6 @@ const COMPOSER_INNER_PADDING_TOP: u16 = 1;
 const COMPOSER_INNER_PADDING_BOTTOM: u16 = 1;
 const COMPOSER_PLACEHOLDER: &str = "What's on your mind?";
 const COMPOSER_EDIT_PLACEHOLDER: &str = "Editing selected memo...";
-const COMPOSER_QUIT_CONFIRM_PLACEHOLDER: &str = "Press Esc again to quit";
 const IMAGE_ONLY_MEMO_PLACEHOLDER: &str = "[Image-only memo]";
 
 pub fn draw(frame: &mut Frame<'_>, widget: &mut ChatWidget) {
@@ -243,7 +242,6 @@ fn render_composer(
     frame.render_widget(Block::default().style(block_style), area);
 
     let status_message = widget.status_message().map(ToString::to_string);
-    let quit_confirmation_pending = widget.quit_confirmation_pending();
     let is_editing_memo = widget.is_editing_memo();
 
     let composer = widget.bottom_pane_mut().composer_mut();
@@ -269,11 +267,7 @@ fn render_composer(
         .scroll((vertical_scroll, 0));
     frame.render_widget(paragraph, input_area);
 
-    let footer = composer_footer_text(
-        composer_mode,
-        quit_confirmation_pending,
-        status_message.as_deref(),
-    );
+    let footer = composer_footer_text(composer_mode, status_message.as_deref());
     frame.render_widget(
         Paragraph::new(footer.clone()).style(text_style.add_modifier(Modifier::DIM)),
         Rect {
@@ -296,24 +290,14 @@ fn render_composer(
     }
 }
 
-fn composer_footer_text(
-    mode: VimMode,
-    quit_confirmation_pending: bool,
-    status_message: Option<&str>,
-) -> String {
+fn composer_footer_text(mode: VimMode, status_message: Option<&str>) -> String {
     let mode_label = if mode == VimMode::Insert {
         "[INSERT]"
     } else {
         "[NORMAL]"
     };
 
-    let suffix = if quit_confirmation_pending {
-        Some(COMPOSER_QUIT_CONFIRM_PLACEHOLDER)
-    } else {
-        status_message
-    };
-
-    if let Some(value) = suffix {
+    if let Some(value) = status_message {
         format!("{mode_label} {value}")
     } else {
         mode_label.to_string()
@@ -447,8 +431,9 @@ fn help_overlay_content(context: HelpOverlayContext) -> &'static str {
     match context {
         HelpOverlayContext::ComposerNormal => {
             "Composer NORMAL\n\
-:w/:s submit | :W submit+quit on success\n\
-:q/:Q quit (confirm if unsaved)\n\
+  :w/:s submit | :W submit+quit on success\n\
+:q quit (confirm if unsaved) | :!/:Q force quit\n\
+ZZ save+quit | ZQ force quit\n\
 :l open memo list\n\
 h/j/k/l move | b 0 $ | x dd edit\n\
 i/a/I/A/o/O enter insert actions\n\
@@ -651,29 +636,15 @@ mod tests {
     #[test]
     fn composer_footer_appends_status_after_mode() {
         assert_eq!(
-            composer_footer_text(VimMode::Insert, false, Some("saving...")),
+            composer_footer_text(VimMode::Insert, Some("saving...")),
             "[INSERT] saving..."
         );
     }
 
     #[test]
-    fn composer_footer_uses_quit_hint_when_pending() {
-        assert_eq!(
-            composer_footer_text(VimMode::Normal, true, None),
-            "[NORMAL] Press Esc again to quit"
-        );
-    }
-
-    #[test]
     fn composer_footer_uses_mode_when_no_status_or_quit_hint() {
-        assert_eq!(
-            composer_footer_text(VimMode::Insert, false, None),
-            "[INSERT]"
-        );
-        assert_eq!(
-            composer_footer_text(VimMode::Normal, false, None),
-            "[NORMAL]"
-        );
+        assert_eq!(composer_footer_text(VimMode::Insert, None), "[INSERT]");
+        assert_eq!(composer_footer_text(VimMode::Normal, None), "[NORMAL]");
     }
 
     #[test]
