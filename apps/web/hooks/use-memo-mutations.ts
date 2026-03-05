@@ -10,6 +10,7 @@ import {
   createSignedImageUrls,
   extractStoragePath,
 } from "@/lib/supabase/storage";
+import { uploadMemoImages } from "@/lib/memo-image-upload";
 import {
   nextMemoVersion,
   normalizeExpectedVersion,
@@ -132,30 +133,10 @@ export function useMemoMutations({
 
   const uploadImages = useCallback(
     async (files: File[], userId: string): Promise<string[]> => {
-      const uploads = files.map(async (file) => {
-        const fileExt = file.name.split(".").pop() || "bin";
-        const uniqueId =
-          typeof crypto !== "undefined" && crypto.randomUUID
-            ? crypto.randomUUID()
-            : Math.random().toString(36).slice(2);
-        const fileName = `${userId}/${Date.now()}-${uniqueId}.${fileExt}`;
-
-        const { error: uploadError } = await supabase.storage
-          .from(MEMO_IMAGES_BUCKET)
-          .upload(fileName, file);
-
-        if (uploadError) {
-          console.error("Upload error:", uploadError);
-          return null;
-        }
-
-        return fileName;
-      });
-
-      const uploadedPaths = await Promise.all(uploads);
-      return uploadedPaths.filter((path): path is string => Boolean(path));
+      void userId;
+      return uploadMemoImages(files);
     },
-    [supabase],
+    [],
   );
 
   const fetchServerMemo = useCallback(

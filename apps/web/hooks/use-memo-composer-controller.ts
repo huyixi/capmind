@@ -4,6 +4,7 @@ import type { Memo } from "@/lib/types";
 import type { MemoComposerSubmitResult } from "@/components/memo-composer/logic/types";
 import type { MemoComposerActions } from "@/components/memo-list/logic/container";
 import { useDraftStorage } from "@/hooks/use-draft-storage";
+import { uploadMemoImages } from "@/lib/memo-image-upload";
 
 const LOCAL_ID_PREFIX = "local-";
 
@@ -253,45 +254,16 @@ export function useMemoComposerController({
         return { ok: true };
       }
 
-      const [{ createClient }, { MEMO_IMAGES_BUCKET }] = await Promise.all([
+      const [{ createClient }] = await Promise.all([
         import("@/lib/supabase/client"),
-        import("@/lib/memo-constants"),
       ]);
       const supabase = createClient();
 
-      const uploadImages = async (
-        files: File[],
-        userId: string,
-      ): Promise<string[]> => {
-        const uploads = files.map(async (file) => {
-          const fileExt = file.name.split(".").pop() || "bin";
-          const uniqueId =
-            typeof crypto !== "undefined" && crypto.randomUUID
-              ? crypto.randomUUID()
-              : Math.random().toString(36).slice(2);
-          const fileName = `${userId}/${Date.now()}-${uniqueId}.${fileExt}`;
-
-          const { error: uploadError } = await supabase.storage
-            .from(MEMO_IMAGES_BUCKET)
-            .upload(fileName, file);
-
-          if (uploadError) {
-            console.error("Upload error:", uploadError);
-            return null;
-          }
-
-          return fileName;
-        });
-
-        const uploadedPaths = await Promise.all(uploads);
-        return uploadedPaths.filter((path): path is string => Boolean(path));
-      };
-
       try {
-        let imagePaths: string[] = [];
-        if (payload.images.length > 0) {
-          imagePaths = await uploadImages(payload.images, user.id);
-        }
+        const imagePaths =
+          payload.images.length > 0
+            ? await uploadMemoImages(payload.images)
+            : [];
 
         const response = await fetch("/api/memos", {
           method: "POST",
@@ -322,10 +294,14 @@ export function useMemoComposerController({
         return { ok: true };
       } catch (error) {
         console.error("Error creating memo:", error);
+        const message =
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "Failed to submit. Please try again.";
         return {
           ok: false,
-          error: "Failed to submit. Please try again.",
-          reason: "unknown",
+          error: message,
+          reason: message.includes("Sign in") ? "auth" : "unknown",
         };
       }
     },
