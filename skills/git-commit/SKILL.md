@@ -78,12 +78,26 @@ git show --stat --oneline -1
 git status --short
 ```
 
+8. Push immediately after commit by default.
+
+```bash
+git push
+```
+
+If push is rejected due to non-fast-forward, rebase then retry:
+
+```bash
+git pull --rebase origin "$(git branch --show-current)"
+git push
+```
+
 ## Safety Rules
 
 - Never commit unrelated files just to clean the tree.
 - Never use `git commit -a` when the tree contains mixed changes.
 - Keep generated artifacts and source changes in separate commits when practical.
 - Do not amend, rebase, or force-push history unless explicitly requested.
+- Default behavior is commit then push; skip auto-push only when user explicitly asks for local-only commit.
 
 ## Quick Recipes
 
