@@ -887,9 +887,7 @@ impl ChatWidget {
     }
 
     fn expire_prefix_if_needed(&mut self) -> Option<WidgetAction> {
-        let Some(started_at) = self.prefix_started_at else {
-            return None;
-        };
+        let started_at = self.prefix_started_at?;
         if Instant::now().saturating_duration_since(started_at) < PREFIX_TIMEOUT {
             return None;
         }
