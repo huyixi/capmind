@@ -33,16 +33,19 @@ TUI keys:
 - `Shift+Enter`: submit memo
 - `Ctrl+S`: submit memo (fallback for terminals that don't emit `Ctrl+Enter`)
 - Composer vim mode: starts in `INSERT`, `Esc` switches to `NORMAL`
-- `Esc` in `NORMAL` (or outside Composer insert mode): press twice to quit TUI (with confirmation)
+- `Esc` in `NORMAL`: cancel pending operator/overlay only; it does not quit
 - If Composer has unsaved changes and you try to quit, footer shows: `[S]ubmit+quit / [D]iscard+quit / [C]/Esc continue`
 - If quit-submit fails after retries, text is cached locally and will be retried next launch
 - `NORMAL` mode navigation/edit keys: arrows, `h`/`j`/`k`/`l`, `b`, `0`, `$`, `i`/`a`/`I`/`A`/`o`/`O`, `x`, `dd`
 - `NORMAL` mode prefixed commands use `:`:
   - `:w`/`:s`: submit and stay
   - `:W`: submit in background (up to 3 attempts, retry delays `1s`, `3s`) and quit on success
-  - `:q` / `:Q`: quit (if unsaved, enter submit/discard confirmation)
+  - `:q`: quit (if unsaved, enter submit/discard confirmation)
+  - `:!`/`:Q`: force quit
   - `:l`: open full-page memo list
   - `:?`: open help popup (`?` / `Esc` / `q` to close)
+  - `ZZ`: save+quit (same as `:W`)
+  - `ZQ`: force quit (same as `:!`/`:Q`)
 - `↑` / `k` (in History): move selection up
 - `↓` / `j` (in History): move selection down
 - `Enter` (in History): load selected memo into Composer for edit mode

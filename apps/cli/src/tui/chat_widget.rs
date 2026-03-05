@@ -17,7 +17,8 @@ const AUTH_REQUIRED_SAVE_PROMPT: &str =
     "Publish requires login. [L]ogin now  [S]ave draft  [C]ancel";
 const QUIT_WITH_UNSAVED_PROMPT: &str =
     "Unsaved content. [S]ubmit+quit  [D]iscard+quit  [C]/Esc continue";
-const COMPOSER_PREFIX_TIP: &str = ":w save  :W save+quit  :q quit  :l list  :? help";
+const COMPOSER_PREFIX_TIP: &str =
+    ":w save  :W save+quit  :q quit  :!/:Q force quit  ZZ/ZQ quit  :l list  :? help";
 const MEMO_LIST_PREFIX_TIP: &str = ":n next page  :p prev page  :c composer  :q quit";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,7 +97,7 @@ pub struct ChatWidget {
     focus: FocusArea,
     pending_delete: Option<PendingDelete>,
     composer_mode: ComposerMode,
-    quit_confirmation_pending: bool,
+    pending_z_command: bool,
     quit_submit_confirm_pending: bool,
     page_mode: PageMode,
     split_list_open: bool,
@@ -130,7 +131,7 @@ impl ChatWidget {
             focus: FocusArea::Composer,
             pending_delete: None,
             composer_mode: ComposerMode::Create,
-            quit_confirmation_pending: false,
+            pending_z_command: false,
             quit_submit_confirm_pending: false,
             page_mode: PageMode::Composer,
             split_list_open: false,
@@ -175,7 +176,7 @@ impl ChatWidget {
 
         if self.pending_delete.is_some() {
             self.clear_prefix();
-            self.quit_confirmation_pending = false;
+            self.pending_z_command = false;
             return self.handle_delete_confirmation_key(key_event);
         }
 
@@ -197,28 +198,53 @@ impl ChatWidget {
             return self.handle_memo_list_key(key_event);
         }
 
-        if self.focus == FocusArea::Composer
-            && key_event.code == KeyCode::Esc
-            && self.bottom_pane.composer().is_insert_mode()
-        {
-            self.quit_confirmation_pending = true;
-            return self.handle_composer_key(key_event);
+        if let Some(action) = self.handle_zz_zq_key(key_event) {
+            return action;
         }
-
-        if key_event.code == KeyCode::Esc {
-            if self.quit_confirmation_pending {
-                return self.request_quit();
-            }
-            self.quit_confirmation_pending = true;
-            return WidgetAction::None;
-        }
-
-        self.quit_confirmation_pending = false;
 
         match self.focus {
             FocusArea::History => self.handle_history_key(key_event),
             FocusArea::Composer => self.handle_composer_key(key_event),
         }
+    }
+
+    fn handle_zz_zq_key(&mut self, key_event: KeyEvent) -> Option<WidgetAction> {
+        if self.focus != FocusArea::Composer {
+            self.pending_z_command = false;
+            return None;
+        }
+
+        if self.bottom_pane.composer().vim_mode() != VimMode::Normal {
+            self.pending_z_command = false;
+            return None;
+        }
+
+        if !is_plain_or_shift(key_event.modifiers) {
+            self.pending_z_command = false;
+            return None;
+        }
+
+        let KeyCode::Char(c) = key_event.code else {
+            self.pending_z_command = false;
+            return None;
+        };
+
+        if self.pending_z_command {
+            self.pending_z_command = false;
+            return match c {
+                'Z' => Some(self.build_submit_action(true)),
+                'Q' => Some(WidgetAction::Quit),
+                _ => None,
+            };
+        }
+
+        if c == 'Z' {
+            self.pending_z_command = true;
+            return Some(WidgetAction::None);
+        }
+
+        self.pending_z_command = false;
+        None
     }
 
     pub fn on_wq_submission_status(&mut self, message: &str) {
@@ -322,10 +348,6 @@ impl ChatWidget {
         self.pending_delete
             .as_ref()
             .map(|pending| pending.preview_text.as_str())
-    }
-
-    pub fn quit_confirmation_pending(&self) -> bool {
-        self.quit_confirmation_pending
     }
 
     pub fn is_editing_memo(&self) -> bool {
@@ -822,7 +844,7 @@ impl ChatWidget {
     }
 
     fn request_quit(&mut self) -> WidgetAction {
-        self.quit_confirmation_pending = false;
+        self.pending_z_command = false;
         if self.composer_dirty {
             self.quit_submit_confirm_pending = true;
             self.set_status_message(QUIT_WITH_UNSAVED_PROMPT.to_string());
@@ -933,7 +955,8 @@ impl ChatWidget {
             'w' | 's' => self.build_submit_action(false),
             'W' => self.build_submit_action(true),
             'q' => self.request_quit(),
-            'Q' => self.request_quit(),
+            'Q' => WidgetAction::Quit,
+            '!' => WidgetAction::Quit,
             'l' => {
                 self.page_mode = PageMode::MemoList;
                 self.focus = FocusArea::History;
@@ -1560,18 +1583,14 @@ mod tests {
     }
 
     #[test]
-    fn command_shift_q_force_quits_even_when_dirty() {
+    fn command_q_bang_force_quits_even_when_dirty() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Char('h')));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = prefix_shift_char(&mut widget, 'Q');
+        let action = prefix_char(&mut widget, '!');
 
-        assert_eq!(action, WidgetAction::None);
-        assert_eq!(
-            widget.status_message(),
-            Some("Unsaved content. [S]ubmit+quit  [D]iscard+quit  [C]/Esc continue")
-        );
+        assert_eq!(action, WidgetAction::Quit);
     }
 
     #[test]
@@ -2054,7 +2073,7 @@ mod tests {
         assert_eq!(action, WidgetAction::None);
         assert_eq!(
             widget.status_message(),
-            Some(":w save  :W save+quit  :q quit  :l list  :? help")
+            Some(":w save  :W save+quit  :q quit  :!/:Q force quit  ZZ/ZQ quit  :l list  :? help")
         );
     }
 
@@ -2081,80 +2100,52 @@ mod tests {
     }
 
     #[test]
-    fn esc_in_composer_insert_switches_mode_and_primes_quit_confirmation() {
+    fn esc_in_composer_insert_switches_to_normal_without_quit_confirmation() {
         let mut widget = ChatWidget::new();
 
         let action = widget.handle_key_event(key(KeyCode::Esc));
         assert_eq!(action, WidgetAction::None);
-        assert!(widget.quit_confirmation_pending());
         assert!(!widget.bottom_pane_mut().composer_mut().is_insert_mode());
+        assert_eq!(widget.status_message(), None);
     }
 
     #[test]
-    fn esc_twice_from_composer_insert_quits() {
+    fn esc_twice_from_composer_insert_does_not_quit() {
         let mut widget = ChatWidget::new();
 
         let first = widget.handle_key_event(key(KeyCode::Esc));
         assert_eq!(first, WidgetAction::None);
-        assert!(widget.quit_confirmation_pending());
-
-        let second = widget.handle_key_event(key(KeyCode::Esc));
-        assert_eq!(second, WidgetAction::Quit);
-    }
-
-    #[test]
-    fn esc_twice_with_unsaved_content_starts_status_row_confirmation() {
-        let mut widget = ChatWidget::new();
-        widget.handle_key_event(key(KeyCode::Char('x')));
-
-        let first = widget.handle_key_event(key(KeyCode::Esc));
-        assert_eq!(first, WidgetAction::None);
-        assert!(widget.quit_confirmation_pending());
 
         let second = widget.handle_key_event(key(KeyCode::Esc));
         assert_eq!(second, WidgetAction::None);
-        assert_eq!(
-            widget.status_message(),
-            Some("Unsaved content. [S]ubmit+quit  [D]iscard+quit  [C]/Esc continue")
-        );
     }
 
     #[test]
-    fn status_row_confirmation_discard_quits() {
+    fn zz_submits_before_quit_in_normal_mode() {
         let mut widget = ChatWidget::new();
         widget.handle_key_event(key(KeyCode::Char('x')));
         widget.handle_key_event(key(KeyCode::Esc));
-        widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = widget.handle_key_event(shift_char('D'));
-        assert_eq!(action, WidgetAction::Quit);
-    }
+        let first = widget.handle_key_event(shift_char('Z'));
+        assert_eq!(first, WidgetAction::None);
+        let second = widget.handle_key_event(shift_char('Z'));
 
-    #[test]
-    fn status_row_confirmation_submit_emits_before_quit_action() {
-        let mut widget = ChatWidget::new();
-        widget.handle_key_event(key(KeyCode::Char('x')));
-        widget.handle_key_event(key(KeyCode::Esc));
-        widget.handle_key_event(key(KeyCode::Esc));
-
-        let action = widget.handle_key_event(shift_char('S'));
         assert_eq!(
-            action,
+            second,
             WidgetAction::SubmitCreateBeforeQuit("x".to_string())
         );
     }
 
     #[test]
-    fn status_row_confirmation_cancel_keeps_editing() {
+    fn zq_force_quits_in_normal_mode() {
         let mut widget = ChatWidget::new();
-        widget.handle_key_event(key(KeyCode::Char('x')));
-        widget.handle_key_event(key(KeyCode::Esc));
         widget.handle_key_event(key(KeyCode::Esc));
 
-        let action = widget.handle_key_event(key(KeyCode::Esc));
-        assert_eq!(action, WidgetAction::None);
-        assert_eq!(widget.status_message(), None);
-        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "x");
+        let first = widget.handle_key_event(shift_char('Z'));
+        assert_eq!(first, WidgetAction::None);
+        let second = widget.handle_key_event(shift_char('Q'));
+
+        assert_eq!(second, WidgetAction::Quit);
     }
 
     fn history_texts(widget: &ChatWidget) -> Vec<String> {
