@@ -73,12 +73,12 @@ export function MemoImagePreview({
         <button
           type="button"
           onClick={onClose}
-          className="absolute left-4 top-[calc(env(safe-area-inset-top)+1rem)] z-[60] inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/30 text-white transition hover:bg-white/50"
+          className="fixed left-4 top-[calc(env(safe-area-inset-top)+1rem)] z-[100] inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/30 text-white transition hover:bg-white/50"
           aria-label="Close image preview"
         >
           <X className="h-4 w-4" />
         </button>
-        <div className="flex h-full w-full flex-col">
+        <div className="relative z-0 flex h-full w-full flex-col">
           <div className="flex min-h-0 flex-1 items-center justify-center p-4">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
