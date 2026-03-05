@@ -67,7 +67,7 @@ export function MemoImagePreview({
     >
       <DialogContent
         showCloseButton={false}
-        className="!fixed !inset-0 !h-[100dvh] !w-[100dvw] !max-w-none !max-h-none !translate-x-0 !translate-y-0 rounded-none border-none bg-black p-0 shadow-none"
+        className="!fixed !inset-0 !flex !h-[100dvh] !w-[100dvw] !max-h-none !max-w-none !items-center !justify-center !translate-x-0 !translate-y-0 overflow-hidden rounded-none border-none bg-black p-0 shadow-none"
       >
         <DialogTitle className="sr-only">Image preview</DialogTitle>
         <button
@@ -78,15 +78,13 @@ export function MemoImagePreview({
         >
           <X className="h-4 w-4" />
         </button>
-        <div className="relative z-0 flex h-full w-full flex-col">
-          <div className="flex min-h-0 flex-1 items-center justify-center p-4">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={activeImage.src}
-              alt="Expanded memo image"
-              className="h-auto w-auto max-h-[min(88vh,900px)] max-w-[min(92vw,1200px)] object-contain"
-            />
-          </div>
+        <div className="relative z-0 flex h-full w-full items-center justify-center p-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={activeImage.src}
+            alt="Expanded memo image"
+            className="block h-auto w-auto max-h-[min(88vh,900px)] max-w-[min(92vw,1200px)] object-contain"
+          />
         </div>
       </DialogContent>
     </Dialog>
