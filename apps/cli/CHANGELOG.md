@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/huyixi/capmind/compare/capmind-v0.6.0...capmind-v0.7.0) (2026-03-05)
+
+
+### Features
+
+* **cli:** show : prefix command tips ([#13](https://github.com/huyixi/capmind/issues/13)) ([724351b](https://github.com/huyixi/capmind/commit/724351b08739ed7f8d3529d05ed8bb3ded83e6bf))
+
 ## [0.6.0](https://github.com/huyixi/capmind/compare/capmind-v0.5.0...capmind-v0.6.0) (2026-03-04)
 
 
