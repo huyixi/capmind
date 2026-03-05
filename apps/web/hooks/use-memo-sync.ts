@@ -2,11 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import type { SWRInfiniteKeyedMutator } from "swr/infinite";
 import { Memo } from "@/lib/types";
-import {
-  nextMemoVersion,
-  normalizeExpectedVersion,
-  normalizeMemoVersion,
-} from "@/lib/memo-utils";
+import { normalizeExpectedVersion, normalizeMemoVersion } from "@/lib/memo-utils";
 import {
   getOutboxItems,
   removeOutboxItem,
@@ -250,25 +246,24 @@ export function useMemoSync({
             const expectedVersion = normalizeExpectedVersion(
               item.expectedVersion,
             );
-            const nextVersion = nextMemoVersion(expectedVersion);
-            const { data: deletedMemo, error } = await supabase
-              .from("memos")
-              .update({
-                deleted_at: item.deletedAt,
-                updated_at: item.deletedAt,
-                version: nextVersion,
-              })
-              .eq("id", item.memoId)
-              .eq("version", expectedVersion)
-              .select("id")
-              .maybeSingle();
+            const response = await fetch(`/api/memos/${item.memoId}`, {
+              method: "DELETE",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                expectedVersion,
+                deletedAt: item.deletedAt,
+              }),
+            });
 
-            if (error) throw error;
-
-            if (item.id !== undefined) {
-              await removeOutboxItem(item.id);
+            if (response.status === 401 || response.status === 403) {
+              break;
             }
-            if (!deletedMemo) {
+
+            if (response.status === 409) {
+              if (item.id !== undefined) {
+                await removeOutboxItem(item.id);
+              }
               const serverMemo = await fetchServerMemo(item.memoId);
               if (serverMemo) {
                 const nextServerMemo = normalizeServerMemo(serverMemo);
@@ -291,6 +286,14 @@ export function useMemoSync({
               }
               didSync = true;
               continue;
+            }
+
+            if (!response.ok) {
+              throw new Error("Failed to delete memo");
+            }
+
+            if (item.id !== undefined) {
+              await removeOutboxItem(item.id);
             }
             didSync = true;
             continue;
@@ -300,25 +303,25 @@ export function useMemoSync({
             const expectedVersion = normalizeExpectedVersion(
               item.expectedVersion,
             );
-            const nextVersion = nextMemoVersion(expectedVersion);
-            const { data: restoredMemo, error } = await supabase
-              .from("memos")
-              .update({
-                deleted_at: null,
-                updated_at: item.restoredAt,
-                version: nextVersion,
-              })
-              .eq("id", item.memoId)
-              .eq("version", expectedVersion)
-              .select("id")
-              .maybeSingle();
+            const response = await fetch(`/api/memos/${item.memoId}`, {
+              method: "PATCH",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "restore",
+                expectedVersion,
+                restoredAt: item.restoredAt,
+              }),
+            });
 
-            if (error) throw error;
-
-            if (item.id !== undefined) {
-              await removeOutboxItem(item.id);
+            if (response.status === 401 || response.status === 403) {
+              break;
             }
-            if (!restoredMemo) {
+
+            if (response.status === 409) {
+              if (item.id !== undefined) {
+                await removeOutboxItem(item.id);
+              }
               const serverMemo = await fetchServerMemo(item.memoId);
               if (serverMemo) {
                 const nextServerMemo = normalizeServerMemo(serverMemo);
@@ -341,6 +344,28 @@ export function useMemoSync({
               }
               didSync = true;
               continue;
+            }
+
+            if (!response.ok) {
+              throw new Error("Failed to restore memo");
+            }
+
+            const payload = await response.json();
+            const restoredMemo = payload?.memo as Memo | undefined;
+            if (restoredMemo) {
+              mutate(
+                (current) =>
+                  replaceMemo(
+                    resolvePages(current),
+                    item.memoId,
+                    normalizeServerMemo(restoredMemo),
+                  ),
+                { revalidate: false },
+              );
+            }
+
+            if (item.id !== undefined) {
+              await removeOutboxItem(item.id);
             }
             didSync = true;
           }

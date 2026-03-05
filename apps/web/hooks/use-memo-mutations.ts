@@ -582,24 +582,25 @@ export function useMemoMutations({
 
       try {
         let needsRevalidate = false;
-        const nextVersion = nextMemoVersion(expectedVersionValue);
         await mutate(
           async (current) => {
             const basePages = resolvePages(current);
-            const { data: deletedMemo, error } = await supabase
-              .from("memos")
-              .update({
-                deleted_at: deletedAt,
-                updated_at: deletedAt,
-                version: nextVersion,
-              })
-              .eq("id", id)
-              .eq("version", expectedVersionValue)
-              .select("id")
-              .maybeSingle();
+            const response = await fetch(`/api/memos/${id}`, {
+              method: "DELETE",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                expectedVersion: expectedVersionValue,
+                deletedAt,
+              }),
+            });
 
-            if (error) throw error;
-            if (!deletedMemo) {
+            if (response.status === 401 || response.status === 403) {
+              needsRevalidate = true;
+              return basePages;
+            }
+
+            if (response.status === 409) {
               const serverMemo = await fetchServerMemo(id);
               if (serverMemo) {
                 if (shouldShowMemo(serverMemo)) {
@@ -609,6 +610,10 @@ export function useMemoMutations({
               }
               needsRevalidate = true;
               return removeMemo(basePages, id);
+            }
+
+            if (!response.ok) {
+              throw new Error("Failed to delete memo");
             }
 
             return removeMemo(basePages, id);
@@ -638,7 +643,6 @@ export function useMemoMutations({
       replaceMemo,
       resolvePages,
       shouldShowMemo,
-      supabase,
     ],
   );
 
@@ -673,26 +677,26 @@ export function useMemoMutations({
       }
 
       try {
-        let restoredMemoRow: MemoRow | null = null;
+        let restoredMemo: Memo | null = null;
         await mutate(
           async (current) => {
             const basePages = resolvePages(current);
-            const { data: restoredMemo, error } = await supabase
-              .from("memos")
-              .update({
-                deleted_at: null,
-                updated_at: restoredAt,
-                version: nextVersion,
-              })
-              .eq("id", id)
-              .eq("version", expectedVersionValue)
-              .select(
-                "id, user_id, text, created_at, updated_at, version, deleted_at",
-              )
-              .maybeSingle();
+            const response = await fetch(`/api/memos/${id}`, {
+              method: "PATCH",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "restore",
+                expectedVersion: expectedVersionValue,
+                restoredAt,
+              }),
+            });
 
-            if (error) throw error;
-            if (!restoredMemo) {
+            if (response.status === 401 || response.status === 403) {
+              throw new Error("Unauthorized");
+            }
+
+            if (response.status === 409) {
               const serverMemo = await fetchServerMemo(id);
               if (serverMemo) {
                 if (shouldShowMemo(serverMemo)) {
@@ -703,16 +707,24 @@ export function useMemoMutations({
               throw new Error("Restore failed without server memo.");
             }
 
-            restoredMemoRow = restoredMemo as MemoRow;
-            const normalizedVersion = normalizeMemoVersion(
-              restoredMemoRow.version,
-            );
+            if (!response.ok) {
+              throw new Error("Failed to restore memo");
+            }
+
+            const payload = await response.json();
+            const responseMemo = payload?.memo as Memo | undefined;
+            if (!responseMemo) {
+              throw new Error("Missing memo in restore response");
+            }
+
+            restoredMemo = responseMemo;
+            const normalizedVersion = normalizeMemoVersion(responseMemo.version);
             return replaceMemo(basePages, id, {
               ...optimisticMemo,
-              ...restoredMemoRow,
+              ...responseMemo,
               version: normalizedVersion,
               serverVersion: normalizedVersion,
-              deleted_at: restoredMemoRow.deleted_at ?? null,
+              deleted_at: responseMemo.deleted_at ?? null,
             });
           },
           {
@@ -723,44 +735,8 @@ export function useMemoMutations({
           },
         );
 
-        if (restoredMemoRow) {
-          const restoredMemo = restoredMemoRow as MemoRow;
-          const normalizedRestoredMemo = {
-            ...restoredMemo,
-            version: normalizeMemoVersion(restoredMemo.version),
-          };
-          const { data: imageRows, error: imageError } = await supabase
-            .from("memo_images")
-            .select("url, sort_order")
-            .eq("memo_id", id)
-            .order("sort_order", { ascending: true });
-
-          if (imageError) {
-            console.error("Error fetching memo images:", imageError);
-          }
-
-          const rawImageUrls = imageRows?.map((row) => row.url) ?? [];
-          const resolvedUrls =
-            rawImageUrls.length > 0
-              ? await createSignedImageUrls(
-                  supabase,
-                  MEMO_IMAGES_BUCKET,
-                  rawImageUrls,
-                  MEMO_IMAGE_URL_TTL_SECONDS,
-                )
-              : [];
-
-          const hydratedMemo = {
-            ...normalizedRestoredMemo,
-            images: resolvedUrls,
-            hasImages:
-              rawImageUrls.length > 0 ? true : optimisticMemo.hasImages,
-            imageCount:
-              rawImageUrls.length > 0
-                ? rawImageUrls.length
-                : optimisticMemo.imageCount,
-          };
-          updateActiveListCache(hydratedMemo);
+        if (restoredMemo) {
+          updateActiveListCache(restoredMemo);
         }
         return true;
       } catch (error) {
@@ -776,7 +752,6 @@ export function useMemoMutations({
       replaceMemo,
       resolvePages,
       shouldShowMemo,
-      supabase,
       updateActiveListCache,
     ],
   );
