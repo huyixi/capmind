@@ -2,9 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import Image from "next/image";
 import { X } from "lucide-react";
-import { isLocalImageUrl } from "../logic/image-utils";
 
 interface MemoImagePreviewProps {
   imageUrls: string[];
@@ -13,73 +11,15 @@ interface MemoImagePreviewProps {
 }
 
 const PLACEHOLDER_SRC = "/placeholder.svg";
-const SUPABASE_STORAGE_PREFIX = "/storage/v1/object/";
-
-const isRelativeImageUrl = (url: string) => url.startsWith("/");
-const isHttpImageUrl = (url: string) =>
-  url.startsWith("http://") || url.startsWith("https://");
-
-let supabaseEnvHost: string | null = null;
-let supabaseEnvProtocol: string | null = null;
-let supabaseEnvPort: string | null = null;
-
-if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
-  try {
-    const supabaseEnvUrl = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL);
-    supabaseEnvHost = supabaseEnvUrl.hostname;
-    supabaseEnvProtocol = supabaseEnvUrl.protocol;
-    supabaseEnvPort = supabaseEnvUrl.port || null;
-  } catch {
-    // Ignore invalid environment URL.
-  }
-}
-
-const isSupabaseStoragePath = (pathname: string) =>
-  pathname.startsWith(SUPABASE_STORAGE_PREFIX);
-
-const isHostedSupabase = (hostname: string) =>
-  hostname === "supabase.co" ||
-  hostname.endsWith(".supabase.co") ||
-  hostname.endsWith(".supabase.in");
-
-const isAllowedRemoteImageUrl = (url: string) => {
-  try {
-    const parsedUrl = new URL(url);
-    if (!isSupabaseStoragePath(parsedUrl.pathname)) return false;
-
-    if (supabaseEnvHost && parsedUrl.hostname === supabaseEnvHost) {
-      if (supabaseEnvProtocol && parsedUrl.protocol !== supabaseEnvProtocol) {
-        return false;
-      }
-      if (supabaseEnvPort && parsedUrl.port !== supabaseEnvPort) {
-        return false;
-      }
-      return true;
-    }
-
-    if (parsedUrl.protocol !== "https:") return false;
-    return isHostedSupabase(parsedUrl.hostname);
-  } catch {
-    return false;
-  }
-};
-
 const getSafeImageSrc = (url: string) => {
   if (typeof url !== "string") return PLACEHOLDER_SRC;
   const trimmed = url.trim();
   return trimmed.length > 0 ? trimmed : PLACEHOLDER_SRC;
 };
 
-const shouldUseNextImage = (src: string) => {
-  if (isLocalImageUrl(src)) return false;
-  if (isRelativeImageUrl(src)) return true;
-  if (!isHttpImageUrl(src)) return false;
-  return isAllowedRemoteImageUrl(src);
-};
-
 const resolveImage = (url: string) => {
   const src = getSafeImageSrc(url);
-  return { src, useNextImage: shouldUseNextImage(src) };
+  return { src };
 };
 
 const clampIndex = (index: number, length: number) => {
@@ -133,35 +73,19 @@ export function MemoImagePreview({
         <button
           type="button"
           onClick={onClose}
-          className="absolute left-4 top-[calc(env(safe-area-inset-top)+1rem)] z-10 inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/30 text-white transition hover:bg-white/50"
+          className="absolute left-4 top-[calc(env(safe-area-inset-top)+1rem)] z-[60] inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/30 text-white transition hover:bg-white/50"
           aria-label="Close image preview"
         >
           <X className="h-4 w-4" />
         </button>
         <div className="flex h-full w-full flex-col">
           <div className="flex min-h-0 flex-1 items-center justify-center p-4">
-            {activeImage.useNextImage ? (
-              <div className="relative h-full w-full max-h-full max-w-full">
-                <Image
-                  src={activeImage.src}
-                  alt="Expanded memo image"
-                  fill
-                  sizes="(max-width: 768px) 100vw, 1200px"
-                  className="object-contain"
-                />
-              </div>
-            ) : (
-              <>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={activeImage.src}
-                  alt="Expanded memo image"
-                  width={1200}
-                  height={1200}
-                  className="h-full w-full object-contain"
-                />
-              </>
-            )}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={activeImage.src}
+              alt="Expanded memo image"
+              className="h-auto w-auto max-h-[min(88vh,900px)] max-w-[min(92vw,1200px)] object-contain"
+            />
           </div>
         </div>
       </DialogContent>
