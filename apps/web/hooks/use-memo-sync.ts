@@ -8,11 +8,6 @@ import {
   normalizeMemoVersion,
 } from "@/lib/memo-utils";
 import {
-  MEMO_IMAGE_URL_TTL_SECONDS,
-  MEMO_IMAGES_BUCKET,
-} from "@/lib/memo-constants";
-import { createSignedImageUrls } from "@/lib/supabase/storage";
-import {
   getOutboxItems,
   removeOutboxItem,
 } from "@/lib/offline/memo-queue";
@@ -98,51 +93,32 @@ export function useMemoSync({
               imagePaths = await uploadImages(item.files, initialUser.id);
             }
 
-            const { data: newMemo, error } = await supabase
-              .from("memos")
-              .insert({
-                user_id: initialUser.id,
+            const response = await fetch("/api/memos", {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
                 text: item.text,
-              })
-              .select(
-                "id, user_id, text, created_at, updated_at, version, deleted_at",
-              )
-              .single();
+                imageUrls: imagePaths,
+              }),
+            });
 
-            if (error) throw error;
+            if (!response.ok) {
+              throw new Error("Failed to create memo");
+            }
 
-            let storedImages: string[] = [];
-            if (imagePaths.length > 0) {
-              const displayUrls = await createSignedImageUrls(
-                supabase,
-                MEMO_IMAGES_BUCKET,
-                imagePaths,
-                MEMO_IMAGE_URL_TTL_SECONDS,
-              );
-              const { error: imageError } = await supabase
-                .from("memo_images")
-                .insert(
-                  imagePaths.map((url, index) => ({
-                    memo_id: newMemo.id,
-                    url,
-                    sort_order: index,
-                  })),
-                );
-              if (imageError) {
-                console.error("Error saving memo images:", imageError);
-                storedImages = [];
-              } else {
-                storedImages = displayUrls;
-              }
+            const payload = await response.json();
+            const createdMemo = payload?.memo as Memo | undefined;
+            if (!createdMemo) {
+              throw new Error("Missing memo in create response");
             }
 
             await mutate(
               (current) =>
                 replaceMemo(resolvePages(current), item.clientId, {
-                  ...newMemo,
-                  version: normalizeMemoVersion(newMemo.version),
-                  images: storedImages,
-                  serverVersion: normalizeMemoVersion(newMemo.version),
+                  ...createdMemo,
+                  version: normalizeMemoVersion(createdMemo.version),
+                  serverVersion: normalizeMemoVersion(createdMemo.version),
                   hasConflict: false,
                   conflictServerMemo: undefined,
                   conflictType: undefined,

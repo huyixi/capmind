@@ -293,46 +293,30 @@ export function useMemoComposerController({
           imagePaths = await uploadImages(payload.images, user.id);
         }
 
-        const { data: newMemo, error } = await supabase
-          .from("memos")
-          .insert({
-            user_id: user.id,
+        const response = await fetch("/api/memos", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
             text: trimmedText,
-          })
-          .select("id")
-          .single();
+            imageUrls: imagePaths,
+          }),
+        });
 
-        if (error || !newMemo) {
-          const status = (error as { status?: number } | null)?.status;
-          if (status === 401 || status === 403) {
-            return {
-              ok: false,
-              error: "Sign in to submit memos. Your draft is still here.",
-              reason: "auth",
-            };
-          }
-          console.error("Error creating memo:", error);
+        if (response.status === 401 || response.status === 403) {
+          return {
+            ok: false,
+            error: "Sign in to submit memos. Your draft is still here.",
+            reason: "auth",
+          };
+        }
+
+        if (!response.ok) {
           return {
             ok: false,
             error: "Failed to submit. Please try again.",
             reason: "unknown",
           };
-        }
-
-        if (imagePaths.length > 0) {
-          const { error: imageError } = await supabase
-            .from("memo_images")
-            .insert(
-              imagePaths.map((url, index) => ({
-                memo_id: newMemo.id,
-                url,
-                sort_order: index,
-              })),
-            );
-
-          if (imageError) {
-            console.error("Error saving memo images:", imageError);
-          }
         }
 
         return { ok: true };

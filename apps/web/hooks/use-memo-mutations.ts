@@ -265,58 +265,37 @@ export function useMemoMutations({
             imagePaths = await uploadImages(images, initialUser.id);
           }
 
-          const { data: newMemo, error } = await supabase
-            .from("memos")
-            .insert({
-              user_id: initialUser.id,
+          const response = await fetch("/api/memos", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
               text: trimmedText,
-            })
-            .select(
-              "id, user_id, text, created_at, updated_at, version, deleted_at",
-            )
-            .single();
+              imageUrls: imagePaths,
+            }),
+          });
 
-          if (error) throw error;
-          const normalizedNewMemo = {
-            ...newMemo,
-            version: normalizeMemoVersion(newMemo.version),
-          };
+          if (!response.ok) {
+            throw new Error("Failed to create memo");
+          }
+
+          const payload = await response.json();
+          const createdMemo = payload?.memo as Memo | undefined;
+          if (!createdMemo) {
+            throw new Error("Missing memo in create response");
+          }
 
           cleanupOptimisticImages(localId);
-
-          let storedImages: string[] = [];
-          if (imagePaths.length > 0) {
-            const displayUrls = await createSignedImageUrls(
-              supabase,
-              MEMO_IMAGES_BUCKET,
-              imagePaths,
-              MEMO_IMAGE_URL_TTL_SECONDS,
-            );
-            const { error: imageError } = await supabase
-              .from("memo_images")
-              .insert(
-                imagePaths.map((url, index) => ({
-                  memo_id: newMemo.id,
-                  url,
-                  sort_order: index,
-                })),
-              );
-            if (imageError) {
-              console.error("Error saving memo images:", imageError);
-              storedImages = [];
-            } else {
-              storedImages = displayUrls;
-            }
-          }
 
           mutate(
             (current) =>
               replaceMemo(resolvePages(current), localId, {
-                ...normalizedNewMemo,
-                images: storedImages,
-                serverVersion: normalizedNewMemo.version,
+                ...createdMemo,
+                version: normalizeMemoVersion(createdMemo.version),
+                serverVersion: normalizeMemoVersion(createdMemo.version),
                 hasConflict: false,
                 conflictServerMemo: undefined,
+                conflictType: undefined,
               }),
             { revalidate: false },
           );
@@ -334,7 +313,6 @@ export function useMemoMutations({
       replaceMemo,
       resolvePages,
       uploadImages,
-      supabase,
     ],
   );
 
