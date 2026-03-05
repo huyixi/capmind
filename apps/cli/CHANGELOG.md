@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/huyixi/capmind/compare/capmind-v0.7.0...capmind-v0.8.0) (2026-03-05)
+
+
+### Features
+
+* **cli:** remove double-esc quit and add vim-style quit paths ([#16](https://github.com/huyixi/capmind/issues/16)) ([d8582b4](https://github.com/huyixi/capmind/commit/d8582b47e522c730924ed6afb65dc1e14280213c))
+
+
+### Bug Fixes
+
+* **cli:** add real :wq and :q! prefix commands ([#18](https://github.com/huyixi/capmind/issues/18)) ([aff9e6b](https://github.com/huyixi/capmind/commit/aff9e6bb260fc9dcaccb407e0d3ebc3a5bc85a89))
+
 ## [0.7.0](https://github.com/huyixi/capmind/compare/capmind-v0.6.0...capmind-v0.7.0) (2026-03-05)
 
 
