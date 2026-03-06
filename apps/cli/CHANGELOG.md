@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/huyixi/capmind/compare/capmind-v0.9.0...capmind-v0.9.1) (2026-03-06)
+
+
+### Bug Fixes
+
+* **cli:** enable bracketed paste for composer pastes ([#30](https://github.com/huyixi/capmind/issues/30)) ([f30945d](https://github.com/huyixi/capmind/commit/f30945d52b9dba5a7b38ff2865120824af672fde))
+
 ## [0.9.0](https://github.com/huyixi/capmind/compare/capmind-v0.8.1...capmind-v0.9.0) (2026-03-06)
 
 
