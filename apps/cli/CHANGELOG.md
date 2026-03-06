@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/huyixi/capmind/compare/capmind-v0.8.1...capmind-v0.9.0) (2026-03-06)
+
+
+### Features
+
+* **cli:** support pasted image placeholders in composer ([#28](https://github.com/huyixi/capmind/issues/28)) ([5b4de40](https://github.com/huyixi/capmind/commit/5b4de40c2ae4b258f6e72b9fc159e674acd86857))
+
 ## [0.8.1](https://github.com/huyixi/capmind/compare/capmind-v0.8.0...capmind-v0.8.1) (2026-03-05)
 
 
