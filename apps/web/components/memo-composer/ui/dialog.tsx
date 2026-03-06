@@ -39,6 +39,7 @@ export function MemoComposerDialog(props: MemoComposerProps) {
           submitError={composer.submitError}
           onTextChange={composer.handleTextChange}
           onKeyDown={composer.handleKeyDown}
+          onImagePaste={composer.handleImagePaste}
           onAddImage={composer.handleAddImageClick}
           onCancel={composer.handleCancel}
           onSubmit={composer.handleSubmit}
