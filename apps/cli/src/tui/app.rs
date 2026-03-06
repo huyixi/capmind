@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crossterm::event::{self, Event};
+use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -976,7 +976,7 @@ impl TerminalSession {
         enable_raw_mode()
             .map_err(|err| AppError::InvalidInput(format!("Failed enabling raw mode: {err}")))?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen).map_err(|err| {
+        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste).map_err(|err| {
             AppError::InvalidInput(format!("Failed entering alternate screen: {err}"))
         })?;
 
@@ -1007,9 +1007,12 @@ impl TerminalSession {
 
         disable_raw_mode()
             .map_err(|err| AppError::InvalidInput(format!("Failed disabling raw mode: {err}")))?;
-        execute!(self.terminal.backend_mut(), LeaveAlternateScreen).map_err(|err| {
-            AppError::InvalidInput(format!("Failed leaving alternate screen: {err}"))
-        })?;
+        execute!(
+            self.terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableBracketedPaste
+        )
+        .map_err(|err| AppError::InvalidInput(format!("Failed leaving alternate screen: {err}")))?;
         self.terminal
             .show_cursor()
             .map_err(|err| AppError::InvalidInput(format!("Failed showing cursor: {err}")))?;
@@ -1024,7 +1027,12 @@ impl TerminalSession {
 
         enable_raw_mode()
             .map_err(|err| AppError::InvalidInput(format!("Failed enabling raw mode: {err}")))?;
-        execute!(self.terminal.backend_mut(), EnterAlternateScreen).map_err(|err| {
+        execute!(
+            self.terminal.backend_mut(),
+            EnterAlternateScreen,
+            EnableBracketedPaste
+        )
+        .map_err(|err| {
             AppError::InvalidInput(format!("Failed entering alternate screen: {err}"))
         })?;
         self.terminal
@@ -1039,7 +1047,11 @@ impl Drop for TerminalSession {
     fn drop(&mut self) {
         if self.active {
             let _ = disable_raw_mode();
-            let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+            let _ = execute!(
+                self.terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableBracketedPaste
+            );
             self.active = false;
         }
         let _ = self.terminal.show_cursor();
