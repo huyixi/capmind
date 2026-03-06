@@ -1,6 +1,6 @@
 "use client";
 
-import type { ChangeEvent, KeyboardEvent, RefObject } from "react";
+import type { ChangeEvent, ClipboardEvent, KeyboardEvent, RefObject } from "react";
 import { Maximize2, Minimize2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { ActionRow } from "./action-row";
@@ -24,6 +24,7 @@ export interface MemoComposerFormProps {
   submitError: string | null;
   onTextChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onImagePaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
   onAddImage: () => void;
   onCancel: () => void;
   onSubmit: () => void;
@@ -51,6 +52,7 @@ export function MemoComposerForm({
   submitError,
   onTextChange,
   onKeyDown,
+  onImagePaste,
   onAddImage,
   onCancel,
   onSubmit,
@@ -122,6 +124,7 @@ export function MemoComposerForm({
               value={text}
               onChange={onTextChange}
               onKeyDown={onKeyDown}
+              onPaste={onImagePaste}
               onFocus={onTextareaFocus}
               placeholder={placeholder}
               wrap="soft"

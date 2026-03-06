@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent, KeyboardEvent } from "react";
+import type { ChangeEvent, ClipboardEvent, KeyboardEvent } from "react";
 import type { MemoComposerProps } from "./types";
 
 const DEFAULT_MAX_IMAGES = 9;
@@ -266,10 +266,40 @@ export function useMemoComposer({
       if (!canManageImages) return;
       const fileList = Array.from(event.target.files || []);
       if (fileList.length === 0) return;
-      const imageFiles = fileList.filter((file) =>
-        file.type.startsWith("image/"),
-      );
+      const imageFiles = fileList.filter((file) => file.type.startsWith("image/"));
       if (imageFiles.length === 0) return;
+      setSubmitError(null);
+
+      setImages((current) => {
+        const remainingSlots = Math.max(
+          0,
+          maxImages - (current.length + existingImages.length),
+        );
+        if (remainingSlots === 0) return current;
+        const selectedFiles = imageFiles.slice(0, remainingSlots);
+        if (selectedFiles.length === 0) return current;
+        setPreviews((currentPreviews) => [
+          ...currentPreviews,
+          ...selectedFiles.map((file) => URL.createObjectURL(file)),
+        ]);
+        return [...current, ...selectedFiles];
+      });
+
+      resetFileInput();
+    },
+    [canManageImages, existingImages.length, maxImages, resetFileInput],
+  );
+
+  const handleImagePaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!canManageImages) return;
+      const imageFiles = Array.from(event.clipboardData.items)
+        .filter((item) => item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null);
+      if (imageFiles.length === 0) return;
+
+      event.preventDefault();
       setSubmitError(null);
 
       setImages((current) => {
@@ -498,6 +528,7 @@ export function useMemoComposer({
     handleCancel,
     handleOpenChange,
     handleKeyDown,
+    handleImagePaste,
     handleTextChange,
     handleOpenAutoFocus,
     handleTextareaFocus,
