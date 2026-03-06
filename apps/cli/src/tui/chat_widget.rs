@@ -211,6 +211,33 @@ impl ChatWidget {
             FocusArea::Composer => self.handle_composer_key(key_event),
         }
     }
+    pub fn handle_paste_event(&mut self, text: &str) -> WidgetAction {
+        if text.is_empty() {
+            return WidgetAction::None;
+        }
+
+        if self.quit_submit_confirm_pending
+            || self.wq_submission_in_progress
+            || self.help_overlay.is_some()
+            || self.pending_delete.is_some()
+            || self.auth_required_submit.is_some()
+            || self.prefix_pending
+            || self.page_mode == PageMode::MemoList
+            || self.focus != FocusArea::Composer
+            || self.bottom_pane.composer().vim_mode() != VimMode::Insert
+        {
+            return WidgetAction::None;
+        }
+
+        let before_text = self.bottom_pane.composer().text();
+        self.bottom_pane.composer_mut().insert_text(text);
+        self.refresh_composer_dirty_state();
+        if before_text != self.bottom_pane.composer().text() {
+            self.clear_status_message();
+        }
+
+        WidgetAction::None
+    }
 
     fn handle_zz_zq_key(&mut self, key_event: KeyEvent) -> Option<WidgetAction> {
         if self.focus != FocusArea::Composer {
@@ -2262,6 +2289,34 @@ mod tests {
         let second = widget.handle_key_event(shift_char('Q'));
 
         assert_eq!(second, WidgetAction::Quit);
+    }
+
+    #[test]
+    fn paste_inserts_image_placeholders_in_composer_insert_mode() {
+        let mut widget = ChatWidget::new();
+
+        let action = widget.handle_paste_event(
+            "[image1]
+[image2]",
+        );
+
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(
+            widget.bottom_pane_mut().composer_mut().text(),
+            "[image1]
+[image2]"
+        );
+    }
+
+    #[test]
+    fn paste_is_ignored_outside_insert_mode() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+
+        let action = widget.handle_paste_event("[image1]");
+
+        assert_eq!(action, WidgetAction::None);
+        assert_eq!(widget.bottom_pane_mut().composer_mut().text(), "");
     }
 
     fn history_texts(widget: &ChatWidget) -> Vec<String> {

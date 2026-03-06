@@ -111,6 +111,17 @@ impl Composer {
         }
     }
 
+    pub fn insert_text(&mut self, text: &str) {
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        for ch in normalized.chars() {
+            if ch == '\n' {
+                self.insert_newline_raw();
+            } else {
+                self.insert_char(ch);
+            }
+        }
+    }
+
     fn handle_insert_mode_key(&mut self, key_event: KeyEvent) -> ComposerAction {
         match key_event {
             KeyEvent {
@@ -343,6 +354,20 @@ impl Composer {
 
         self.lines.insert(self.cursor_row + 1, next_line);
         self.cursor_row += 1;
+    }
+
+    fn insert_newline_raw(&mut self) {
+        let tail = {
+            let line = &mut self.lines[self.cursor_row];
+            let idx = byte_idx_for_char(line, self.cursor_col);
+            let tail = line[idx..].to_string();
+            line.truncate(idx);
+            tail
+        };
+
+        self.lines.insert(self.cursor_row + 1, tail);
+        self.cursor_row += 1;
+        self.cursor_col = 0;
     }
 
     fn backspace(&mut self) {
@@ -816,5 +841,31 @@ mod tests {
         assert_eq!(composer.text(), "");
         assert_eq!(composer.cursor_row(), 0);
         assert_eq!(composer.cursor_col(), 0);
+    }
+
+    #[test]
+    fn insert_text_handles_multiline_and_crlf() {
+        let mut composer = Composer::new();
+        composer.insert_text("[image1]\r\n[image2]\n[image3]\r[image4]");
+        assert_eq!(composer.text(), "[image1]\n[image2]\n[image3]\n[image4]");
+        assert_eq!(composer.cursor_row(), 3);
+        assert_eq!(composer.cursor_col(), 8);
+    }
+
+    #[test]
+    fn insert_text_respects_cursor_position() {
+        let mut composer = Composer::new();
+        composer.set_text("hello world");
+        composer.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        composer.insert_text(
+            "X
+Y",
+        );
+        assert_eq!(
+            composer.text(),
+            "hello worX
+Yld"
+        );
     }
 }

@@ -57,6 +57,7 @@ TUI keys:
 - `Enter` / `y` / `d` (in delete confirmation): confirm delete
 - `n` / `Esc` (in delete confirmation): cancel delete
 - Memo list page: `j`/`k` or `↑`/`↓` move, `Ctrl+f`/`PageDown` next page, `PageUp` previous page, `:n`/`:p` next/previous page, `/` enters search, search is case-insensitive contains, `Enter` applies search / loads selected memo (outside search mode), `Esc` clears search (in search mode) or returns to composer page, `y` copies selected memo text, `r` refreshes memo list, `d` opens delete confirmation, `:c` returns to composer page, `:q` quits program, `?` opens help popup
+- Paste in Composer `INSERT` mode is supported via bracketed paste. If your clipboard tool pastes image placeholders as text (for example `[image1]`, `[image2]`), they will be inserted directly into the composer.
 
 Composer page starts in single-pane mode (no history pane shown).
 
