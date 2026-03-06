@@ -148,11 +148,14 @@ impl<'a> ComposeApp<'a> {
 
             let event = event::read()
                 .map_err(|err| AppError::InvalidInput(format!("TUI read failed: {err}")))?;
-            let Event::Key(key_event) = event else {
-                continue;
+
+            let action = match event {
+                Event::Key(key_event) => self.widget.handle_key_event(key_event),
+                Event::Paste(text) => self.widget.handle_paste_event(&text),
+                _ => WidgetAction::None,
             };
 
-            match self.widget.handle_key_event(key_event) {
+            match action {
                 WidgetAction::None => {}
                 WidgetAction::Quit => break,
                 WidgetAction::RefreshHistory => {
