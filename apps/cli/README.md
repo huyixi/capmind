@@ -6,6 +6,7 @@ Rust CLI to insert memo text into the existing Supabase `memos` table used by `m
 
 - Rust 1.80+ (tested with `rustc 1.93.1`)
 - A valid user account for email/password sign-in
+- macOS for clipboard image paste in the TUI composer
 
 ## Setup
 
@@ -32,6 +33,7 @@ TUI keys:
 - `Alt+Enter`: submit memo
 - `Shift+Enter`: submit memo
 - `Ctrl+S`: submit memo (fallback for terminals that don't emit `Ctrl+Enter`)
+- `Ctrl+V`: attach an image from the macOS system clipboard in `INSERT` mode
 - Composer vim mode: starts in `INSERT`, `Esc` switches to `NORMAL`
 - `Esc` in `NORMAL`: cancel pending operator/overlay only; it does not quit
 - If Composer has unsaved changes and you try to quit, footer shows: `[S]ubmit+quit / [D]iscard+quit / [C]/Esc continue`
@@ -40,6 +42,7 @@ TUI keys:
 - `NORMAL` mode prefixed commands use `:`:
   - `:w`/`:s`: submit and stay
   - `:wq`: submit in background (up to 3 attempts, retry delays `1s`, `3s`) and quit on success
+  - `:paste` / `:paste-image`: attach an image from the macOS system clipboard
   - `:q`: quit (if unsaved, enter submit/discard confirmation)
   - `:q!`/`:Q`: force quit
   - `:W`/`:!`: legacy aliases for `:wq`/`:q!`
@@ -57,7 +60,9 @@ TUI keys:
 - `Enter` / `y` / `d` (in delete confirmation): confirm delete
 - `n` / `Esc` (in delete confirmation): cancel delete
 - Memo list page: `j`/`k` or `↑`/`↓` move, `Ctrl+f`/`PageDown` next page, `PageUp` previous page, `:n`/`:p` next/previous page, `/` enters search, search is case-insensitive contains, `Enter` applies search / loads selected memo (outside search mode), `Esc` clears search (in search mode) or returns to composer page, `y` copies selected memo text, `r` refreshes memo list, `d` opens delete confirmation, `:c` returns to composer page, `:q` quits program, `?` opens help popup
-- Paste in Composer `INSERT` mode is supported via bracketed paste. If your clipboard tool pastes image placeholders as text (for example `[image1]`, `[image2]`), they will be inserted directly into the composer.
+- Paste in Composer `INSERT` mode is supported via bracketed paste for text.
+- Clipboard image paste is separate: `Ctrl+V` or `:paste` reads the macOS system clipboard and attaches the image as a memo image.
+- Image paste is currently supported only when creating a new memo; editing existing memo attachments is not supported in this first version.
 
 Composer page starts in single-pane mode (no history pane shown).
 
@@ -182,6 +187,7 @@ cargo run -- doctor --json
   - `L`: run interactive login flow and retry submit
   - `S`: keep current text as draft in editor (no publish)
   - `C`/`Esc`: cancel prompt and continue editing
+- If the pending submit includes pasted images and a background retry path is needed, the draft cache also preserves those images for replay on next launch.
 - Successful login stores session data to `~/.capmind/auth.json`:
   `refresh_token`, `access_token`, `access_token_expires_at`, `user_id`.
 - Email/password are only entered interactively in `cap login`.

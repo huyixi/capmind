@@ -3,10 +3,13 @@ use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
+use crate::composer_image::PastedImage;
 use crate::error::AppError;
 
 const MEMO_LIST_PAGE_SIZE: usize = 200;
+const MEMO_IMAGES_BUCKET: &str = "memo-images";
 const DEFAULT_SUPABASE_URL: &str = "https://fpeudcmnzirzjjjqtjep.supabase.co";
 const DEFAULT_SUPABASE_ANON_KEY: &str = "sb_publishable_m_5H3rQuAMJg2HhL-bWOJQ_MCGlZ4Vv";
 const NETWORK_RETRY_DELAYS_MS: [u64; 2] = [250, 1000];
@@ -81,6 +84,13 @@ struct InsertMemoResponse {
     id: String,
     created_at: String,
     version: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct InsertMemoImageRequest<'a> {
+    memo_id: &'a str,
+    url: &'a str,
+    sort_order: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,6 +261,47 @@ impl SupabaseClient {
         })
     }
 
+    pub async fn insert_memo_with_images(
+        &self,
+        access_token: &str,
+        text: &str,
+        images: &[PastedImage],
+    ) -> Result<InsertedMemo, AppError> {
+        if images.is_empty() {
+            return self.insert_memo(access_token, text).await;
+        }
+
+        let user_id = extract_user_id_from_access_token(access_token)?;
+        let mut uploaded_paths: Vec<String> = Vec::with_capacity(images.len());
+        for (index, image) in images.iter().enumerate() {
+            let path = self
+                .upload_memo_image(access_token, &user_id, image, index)
+                .await?;
+            uploaded_paths.push(path);
+        }
+
+        let inserted = match self.insert_memo(access_token, text).await {
+            Ok(inserted) => inserted,
+            Err(err) => {
+                self.cleanup_uploaded_images(access_token, &uploaded_paths)
+                    .await;
+                return Err(err);
+            }
+        };
+
+        if let Err(err) = self
+            .insert_memo_image_rows(access_token, &inserted.id, &uploaded_paths)
+            .await
+        {
+            self.cleanup_uploaded_images(access_token, &uploaded_paths)
+                .await;
+            self.delete_memo_row(access_token, &inserted.id).await;
+            return Err(err);
+        }
+
+        Ok(inserted)
+    }
+
     pub async fn list_recent_memos(&self, access_token: &str) -> Result<Vec<RecentMemo>, AppError> {
         let mut memos = Vec::new();
         let mut offset = 0usize;
@@ -268,6 +319,119 @@ impl SupabaseClient {
         }
 
         Ok(memos)
+    }
+
+    async fn upload_memo_image(
+        &self,
+        access_token: &str,
+        user_id: &str,
+        image: &PastedImage,
+        index: usize,
+    ) -> Result<String, AppError> {
+        let object_path = build_storage_path(user_id, image, index);
+        let endpoint = format!(
+            "{}/storage/v1/object/{}/{}",
+            self.base_url, MEMO_IMAGES_BUCKET, object_path
+        );
+        let response = send_with_network_retry(
+            self.http
+                .post(endpoint)
+                .header("apikey", &self.anon_key)
+                .header("Authorization", format!("Bearer {access_token}"))
+                .header("x-upsert", "false")
+                .header("Content-Type", "image/png")
+                .body(image.png_bytes.clone()),
+            "Supabase image upload failed",
+        )
+        .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = read_error_body(response).await;
+            let message = format!("Upload image failed ({status}): {body}");
+            if status == StatusCode::UNAUTHORIZED {
+                return Err(AppError::Auth(message));
+            }
+            return Err(AppError::Api(message));
+        }
+
+        Ok(object_path)
+    }
+
+    async fn insert_memo_image_rows(
+        &self,
+        access_token: &str,
+        memo_id: &str,
+        uploaded_paths: &[String],
+    ) -> Result<(), AppError> {
+        let endpoint = format!("{}/rest/v1/memo_images", self.base_url);
+        let payload: Vec<InsertMemoImageRequest<'_>> = uploaded_paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| InsertMemoImageRequest {
+                memo_id,
+                url: path.as_str(),
+                sort_order: index,
+            })
+            .collect();
+
+        let response = send_with_network_retry(
+            self.http
+                .post(endpoint)
+                .header("apikey", &self.anon_key)
+                .header("Authorization", format!("Bearer {access_token}"))
+                .header("Prefer", "return=minimal")
+                .json(&payload),
+            "Supabase memo_images insert failed",
+        )
+        .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = read_error_body(response).await;
+            let message = format!("Attach images failed ({status}): {body}");
+            if status == StatusCode::UNAUTHORIZED {
+                return Err(AppError::Auth(message));
+            }
+            return Err(AppError::Api(message));
+        }
+
+        Ok(())
+    }
+
+    async fn delete_memo_row(&self, access_token: &str, memo_id: &str) {
+        let endpoint = format!("{}/rest/v1/memos?id=eq.{}", self.base_url, memo_id);
+        if let Err(err) = send_with_network_retry(
+            self.http
+                .delete(endpoint)
+                .header("apikey", &self.anon_key)
+                .header("Authorization", format!("Bearer {access_token}")),
+            "Supabase memo cleanup failed",
+        )
+        .await
+        {
+            eprintln!("Warning: failed to delete partially created memo {memo_id}: {err}");
+        }
+    }
+
+    async fn cleanup_uploaded_images(&self, access_token: &str, uploaded_paths: &[String]) {
+        for path in uploaded_paths {
+            let endpoint = format!(
+                "{}/storage/v1/object/{}/{}",
+                self.base_url, MEMO_IMAGES_BUCKET, path
+            );
+            if let Err(err) = send_with_network_retry(
+                self.http
+                    .delete(endpoint)
+                    .header("apikey", &self.anon_key)
+                    .header("Authorization", format!("Bearer {access_token}")),
+                "Supabase image cleanup failed",
+            )
+            .await
+            {
+                eprintln!("Warning: failed to clean up uploaded image {path}: {err}");
+            }
+        }
     }
 
     async fn list_recent_memos_page(
@@ -592,6 +756,19 @@ impl SupabaseClient {
             ))),
         }
     }
+}
+
+fn build_storage_path(user_id: &str, image: &PastedImage, index: usize) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(image.filename.as_bytes());
+    hasher.update(&image.png_bytes);
+    let digest = hasher.finalize();
+    let hash = format!("{:x}", digest);
+    format!(
+        "{user_id}/{}-{index}-{}.png",
+        Utc::now().timestamp_millis(),
+        &hash[..12]
+    )
 }
 
 fn to_session(value: AuthTokenResponse) -> Session {

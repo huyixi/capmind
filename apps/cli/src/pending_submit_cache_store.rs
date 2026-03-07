@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+use crate::composer_image::PastedImage;
+
 const CAPMIND_DIR_NAME: &str = ".capmind";
 const PENDING_SUBMIT_CACHE_FILE_NAME: &str = "pending-submit-cache.json";
 
@@ -13,6 +15,8 @@ const PENDING_SUBMIT_CACHE_FILE_NAME: &str = "pending-submit-cache.json";
 pub struct PendingSubmitCacheItem {
     pub id: String,
     pub text: String,
+    #[serde(default)]
+    pub images: Vec<PastedImage>,
     pub created_at: String,
 }
 
@@ -27,9 +31,9 @@ pub fn load() -> Result<Vec<PendingSubmitCacheItem>, String> {
     load_from_path(&path)
 }
 
-pub fn append_dedup(text: &str) -> Result<(), String> {
+pub fn append_dedup(text: &str, images: &[PastedImage]) -> Result<(), String> {
     let path = cache_file_path()?;
-    append_dedup_to_path(&path, text)
+    append_dedup_to_path(&path, text, images)
 }
 
 pub fn save(items: &[PendingSubmitCacheItem]) -> Result<(), String> {
@@ -37,15 +41,19 @@ pub fn save(items: &[PendingSubmitCacheItem]) -> Result<(), String> {
     save_to_path(&path, items)
 }
 
-fn append_dedup_to_path(path: &Path, text: &str) -> Result<(), String> {
+fn append_dedup_to_path(path: &Path, text: &str, images: &[PastedImage]) -> Result<(), String> {
     let mut items = load_from_path(path)?;
-    if items.iter().any(|item| item.text == text) {
+    if items
+        .iter()
+        .any(|item| item.text == text && item.images == images)
+    {
         return Ok(());
     }
 
     items.push(PendingSubmitCacheItem {
-        id: next_item_id(text),
+        id: next_item_id(text, images),
         text: text.to_string(),
+        images: images.to_vec(),
         created_at: Utc::now().to_rfc3339(),
     });
     save_to_path(path, &items)
@@ -89,9 +97,10 @@ fn cache_file_path() -> Result<PathBuf, String> {
         .join(PENDING_SUBMIT_CACHE_FILE_NAME))
 }
 
-fn next_item_id(text: &str) -> String {
+fn next_item_id(text: &str, images: &[PastedImage]) -> String {
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
+    images.hash(&mut hasher);
     Utc::now()
         .timestamp_nanos_opt()
         .unwrap_or_default()
@@ -117,6 +126,8 @@ fn set_file_permissions_600(_path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::composer_image::PastedImage;
+
     use super::{PendingSubmitCacheItem, append_dedup_to_path, load_from_path, save_to_path};
     use std::fs;
     use std::path::PathBuf;
@@ -145,6 +156,10 @@ mod tests {
         let items = vec![PendingSubmitCacheItem {
             id: "id-1".to_string(),
             text: "hello".to_string(),
+            images: vec![PastedImage {
+                filename: "pasted-image-1.png".to_string(),
+                png_bytes: vec![1, 2, 3],
+            }],
             created_at: "2026-03-03T00:00:00Z".to_string(),
         }];
 
@@ -158,12 +173,40 @@ mod tests {
     #[test]
     fn append_dedup_keeps_single_copy_for_same_text() {
         let path = temp_cache_path("dedup");
-        append_dedup_to_path(&path, "same-text").expect("first append should succeed");
-        append_dedup_to_path(&path, "same-text").expect("second append should succeed");
+        append_dedup_to_path(&path, "same-text", &[]).expect("first append should succeed");
+        append_dedup_to_path(&path, "same-text", &[]).expect("second append should succeed");
 
         let loaded = load_from_path(&path).expect("load should succeed");
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].text, "same-text");
+
+        let _ = fs::remove_dir_all(path.parent().expect("parent dir should exist"));
+    }
+
+    #[test]
+    fn append_dedup_keeps_distinct_image_payloads() {
+        let path = temp_cache_path("image-dedup");
+        append_dedup_to_path(
+            &path,
+            "same-text",
+            &[PastedImage {
+                filename: "pasted-image-1.png".to_string(),
+                png_bytes: vec![1, 2, 3],
+            }],
+        )
+        .expect("first append should succeed");
+        append_dedup_to_path(
+            &path,
+            "same-text",
+            &[PastedImage {
+                filename: "pasted-image-2.png".to_string(),
+                png_bytes: vec![4, 5, 6],
+            }],
+        )
+        .expect("second append should succeed");
+
+        let loaded = load_from_path(&path).expect("load should succeed");
+        assert_eq!(loaded.len(), 2);
 
         let _ = fs::remove_dir_all(path.parent().expect("parent dir should exist"));
     }

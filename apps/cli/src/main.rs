@@ -1,5 +1,6 @@
 mod auth;
 mod cli;
+mod composer_image;
 mod doctor;
 mod env_loader;
 mod error;

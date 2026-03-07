@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::composer_image::{MAX_PASTED_IMAGES, PastedImage};
 use crate::supabase::{InsertedMemo, RecentMemo};
 
 use super::bottom_pane::{BottomPane, InputResult};
@@ -17,14 +18,14 @@ const AUTH_REQUIRED_SAVE_PROMPT: &str =
     "Publish requires login. [L]ogin now  [S]ave draft  [C]ancel";
 const QUIT_WITH_UNSAVED_PROMPT: &str =
     "Unsaved content. [S]ubmit+quit  [D]iscard+quit  [C]/Esc continue";
-const COMPOSER_PREFIX_TIP: &str =
-    ":w save  :wq save+quit  :q quit  :q!/:Q force quit  :W/:! alias  ZZ/ZQ quit  :l list  :? help";
+const COMPOSER_PREFIX_TIP: &str = ":w save  :wq save+quit  :paste paste image  :q quit  :q!/:Q force quit  :W/:! alias  ZZ/ZQ quit  :l list  :? help";
 const MEMO_LIST_PREFIX_TIP: &str = ":n next page  :p prev page  :c composer  :q quit";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingSubmitAction {
     Create {
         text: String,
+        images: Vec<PastedImage>,
     },
     Edit {
         memo_id: String,
@@ -37,18 +38,25 @@ pub enum PendingSubmitAction {
 pub enum WidgetAction {
     None,
     LoginForPendingSubmit(PendingSubmitAction),
-    SubmitCreate(String),
+    SubmitCreate {
+        text: String,
+        images: Vec<PastedImage>,
+    },
     SubmitEdit {
         memo_id: String,
         expected_version: String,
         text: String,
     },
-    SubmitCreateBeforeQuit(String),
+    SubmitCreateBeforeQuit {
+        text: String,
+        images: Vec<PastedImage>,
+    },
     SubmitEditBeforeQuit {
         memo_id: String,
         expected_version: String,
         text: String,
     },
+    PasteImageFromClipboard,
     RefreshHistory,
     DeleteMemo {
         memo_id: String,
@@ -109,6 +117,7 @@ pub struct ChatWidget {
     auth_required_submit: Option<PendingSubmitAction>,
     clean_composer_text: String,
     composer_dirty: bool,
+    pasted_images: Vec<PastedImage>,
     prefix_pending: bool,
     prefix_started_at: Option<Instant>,
     prefix_buffer: String,
@@ -144,6 +153,7 @@ impl ChatWidget {
             auth_required_submit: None,
             clean_composer_text: String::new(),
             composer_dirty: false,
+            pasted_images: Vec::new(),
             prefix_pending: false,
             prefix_started_at: None,
             prefix_buffer: String::new(),
@@ -385,6 +395,30 @@ impl ChatWidget {
         matches!(self.composer_mode, ComposerMode::Edit { .. })
     }
 
+    pub fn pasted_images(&self) -> &[PastedImage] {
+        &self.pasted_images
+    }
+
+    pub fn next_pasted_image_index(&self) -> usize {
+        self.pasted_images.len() + 1
+    }
+
+    pub fn add_pasted_image(&mut self, image: PastedImage) -> Result<(), String> {
+        if self.is_editing_memo() {
+            return Err("Image paste is currently supported for new memos only.".to_string());
+        }
+        if self.pasted_images.len() >= MAX_PASTED_IMAGES {
+            return Err(format!("Image limit reached ({MAX_PASTED_IMAGES} max)."));
+        }
+
+        let filename = image.filename.clone();
+        let size_kb = ((image.byte_len() as f64) / 1024.0).ceil() as usize;
+        self.pasted_images.push(image);
+        self.refresh_composer_dirty_state();
+        self.set_status_message(format!("Attached {filename} ({size_kb} KB)."));
+        Ok(())
+    }
+
     pub fn status_message(&self) -> Option<&str> {
         if self.auth_required_submit.is_some() {
             return Some(AUTH_REQUIRED_SAVE_PROMPT);
@@ -600,6 +634,10 @@ impl ChatWidget {
     }
 
     fn handle_composer_key(&mut self, key_event: KeyEvent) -> WidgetAction {
+        if is_clipboard_image_paste_shortcut(key_event) && self.focus == FocusArea::Composer {
+            return WidgetAction::PasteImageFromClipboard;
+        }
+
         let before_text = self.bottom_pane.composer().text();
         let result = self.bottom_pane.handle_key_event(key_event);
         self.refresh_composer_dirty_state();
@@ -607,7 +645,10 @@ impl ChatWidget {
         let action = match result {
             InputResult::None => WidgetAction::None,
             InputResult::Submitted(text) => match &self.composer_mode {
-                ComposerMode::Create => WidgetAction::SubmitCreate(text),
+                ComposerMode::Create => WidgetAction::SubmitCreate {
+                    text,
+                    images: self.pasted_images.clone(),
+                },
                 ComposerMode::Edit {
                     memo_id,
                     expected_version,
@@ -956,6 +997,9 @@ impl ChatWidget {
             self.clear_prefix();
             return action;
         }
+        if self.is_valid_multi_char_prefix() {
+            return WidgetAction::None;
+        }
 
         let first = self
             .prefix_buffer
@@ -972,7 +1016,7 @@ impl ChatWidget {
     fn can_extend_to_multi_char_command(&self, c: char) -> bool {
         self.focus == FocusArea::Composer
             && self.bottom_pane.composer().vim_mode() == VimMode::Normal
-            && matches!(c, 'w' | 'q')
+            && matches!(c, 'w' | 'q' | 'p')
     }
 
     fn execute_multi_char_prefix_command(&mut self) -> Option<WidgetAction> {
@@ -986,8 +1030,29 @@ impl ChatWidget {
         match self.prefix_buffer.as_str() {
             "wq" => Some(self.build_submit_action(true)),
             "q!" => Some(WidgetAction::Quit),
+            "paste" | "paste-image" => Some(WidgetAction::PasteImageFromClipboard),
             _ => None,
         }
+    }
+
+    fn is_valid_multi_char_prefix(&self) -> bool {
+        matches!(
+            self.prefix_buffer.as_str(),
+            "w" | "wq"
+                | "q"
+                | "q!"
+                | "p"
+                | "pa"
+                | "pas"
+                | "past"
+                | "paste"
+                | "paste-"
+                | "paste-i"
+                | "paste-im"
+                | "paste-ima"
+                | "paste-imag"
+                | "paste-image"
+        )
     }
 
     fn flush_prefix_buffer_as_single_char(&mut self) -> Option<WidgetAction> {
@@ -1051,6 +1116,7 @@ impl ChatWidget {
                 self.help_overlay = Some(HelpOverlayContext::ComposerNormal);
                 WidgetAction::None
             }
+            'p' => WidgetAction::PasteImageFromClipboard,
             'w' | 's' => self.build_submit_action(false),
             'W' => self.build_submit_action(true),
             'q' => self.request_quit(),
@@ -1076,9 +1142,15 @@ impl ChatWidget {
         match &self.composer_mode {
             ComposerMode::Create => {
                 if before_quit {
-                    WidgetAction::SubmitCreateBeforeQuit(text)
+                    WidgetAction::SubmitCreateBeforeQuit {
+                        text,
+                        images: self.pasted_images.clone(),
+                    }
                 } else {
-                    WidgetAction::SubmitCreate(text)
+                    WidgetAction::SubmitCreate {
+                        text,
+                        images: self.pasted_images.clone(),
+                    }
                 }
             }
             ComposerMode::Edit {
@@ -1244,6 +1316,7 @@ impl ChatWidget {
         self.page_mode = PageMode::Composer;
         self.composer_mode = ComposerMode::Create;
         self.auth_required_submit = None;
+        self.pasted_images.clear();
         self.set_clean_composer_text("");
     }
 
@@ -1279,7 +1352,8 @@ impl ChatWidget {
     }
 
     fn refresh_composer_dirty_state(&mut self) {
-        self.composer_dirty = self.bottom_pane.composer().text() != self.clean_composer_text;
+        self.composer_dirty = self.bottom_pane.composer().text() != self.clean_composer_text
+            || !self.pasted_images.is_empty();
     }
 
     fn clear_memo_list_filter(&mut self) {
@@ -1393,6 +1467,17 @@ fn is_help_key(key_event: KeyEvent) -> bool {
             modifiers,
             ..
         } if is_plain_or_shift(modifiers)
+    )
+}
+
+fn is_clipboard_image_paste_shortcut(key_event: KeyEvent) -> bool {
+    matches!(
+        key_event,
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers,
+            ..
+        } if modifiers == KeyModifiers::CONTROL && c.eq_ignore_ascii_case(&'v')
     )
 }
 
@@ -1525,6 +1610,7 @@ mod tests {
         let mut widget = ChatWidget::new();
         widget.show_auth_required_submit_prompt(PendingSubmitAction::Create {
             text: "draft".to_string(),
+            images: Vec::new(),
         });
 
         assert_eq!(widget.status_message(), Some(AUTH_REQUIRED_SAVE_PROMPT));
@@ -1535,6 +1621,7 @@ mod tests {
         let mut widget = ChatWidget::new();
         widget.show_auth_required_submit_prompt(PendingSubmitAction::Create {
             text: "draft".to_string(),
+            images: Vec::new(),
         });
 
         let action = widget.handle_key_event(shift_char('L'));
@@ -1542,6 +1629,7 @@ mod tests {
             action,
             WidgetAction::LoginForPendingSubmit(PendingSubmitAction::Create {
                 text: "draft".to_string(),
+                images: Vec::new(),
             })
         );
         assert_eq!(widget.status_message(), None);
@@ -1553,6 +1641,7 @@ mod tests {
         type_text(&mut widget, "hello");
         widget.show_auth_required_submit_prompt(PendingSubmitAction::Create {
             text: "hello".to_string(),
+            images: Vec::new(),
         });
 
         let action = widget.handle_key_event(shift_char('S'));
@@ -1566,6 +1655,7 @@ mod tests {
         let mut widget = ChatWidget::new();
         widget.show_auth_required_submit_prompt(PendingSubmitAction::Create {
             text: "".to_string(),
+            images: Vec::new(),
         });
 
         let action = widget.handle_key_event(key(KeyCode::Char('l')));
@@ -1627,7 +1717,13 @@ mod tests {
         widget.prefix_started_at =
             Some(Instant::now() - PREFIX_TIMEOUT - Duration::from_millis(10));
         let action = widget.handle_key_event(key(KeyCode::Char('x')));
-        assert_eq!(action, WidgetAction::SubmitCreate("h".to_string()));
+        assert_eq!(
+            action,
+            WidgetAction::SubmitCreate {
+                text: "h".to_string(),
+                images: Vec::new(),
+            }
+        );
     }
 
     #[test]
@@ -1637,7 +1733,13 @@ mod tests {
         widget.handle_key_event(key(KeyCode::Esc));
 
         let action = prefix_char(&mut widget, 's');
-        assert_eq!(action, WidgetAction::SubmitCreate("h".to_string()));
+        assert_eq!(
+            action,
+            WidgetAction::SubmitCreate {
+                text: "h".to_string(),
+                images: Vec::new(),
+            }
+        );
     }
 
     #[test]
@@ -1658,6 +1760,28 @@ mod tests {
                 text: "memo-1".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn ctrl_v_emits_clipboard_image_paste_action_in_insert_mode() {
+        let mut widget = ChatWidget::new();
+        let action = widget.handle_key_event(ctrl(KeyCode::Char('v')));
+        assert_eq!(action, WidgetAction::PasteImageFromClipboard);
+    }
+
+    #[test]
+    fn prefix_command_paste_emits_clipboard_image_paste_action() {
+        let mut widget = ChatWidget::new();
+        widget.handle_key_event(key(KeyCode::Esc));
+        widget.handle_key_event(key(KeyCode::Char(':')));
+        for c in ['p', 'a', 's', 't'] {
+            assert_eq!(
+                widget.handle_key_event(key(KeyCode::Char(c))),
+                WidgetAction::None
+            );
+        }
+        let action = widget.handle_key_event(key(KeyCode::Char('e')));
+        assert_eq!(action, WidgetAction::PasteImageFromClipboard);
     }
 
     #[test]
@@ -1804,7 +1928,13 @@ mod tests {
 
         widget.handle_key_event(key(KeyCode::Char('?')));
         let submit = prefix_char(&mut widget, 's');
-        assert_eq!(submit, WidgetAction::SubmitCreate("h".to_string()));
+        assert_eq!(
+            submit,
+            WidgetAction::SubmitCreate {
+                text: "h".to_string(),
+                images: Vec::new(),
+            }
+        );
     }
 
     #[test]
@@ -2158,7 +2288,10 @@ mod tests {
 
         assert_eq!(
             action,
-            WidgetAction::SubmitCreateBeforeQuit("h".to_string())
+            WidgetAction::SubmitCreateBeforeQuit {
+                text: "h".to_string(),
+                images: Vec::new(),
+            }
         );
         assert!(widget.wq_submission_in_progress());
     }
@@ -2186,7 +2319,10 @@ mod tests {
 
         assert_eq!(
             action,
-            WidgetAction::SubmitCreateBeforeQuit("h".to_string())
+            WidgetAction::SubmitCreateBeforeQuit {
+                text: "h".to_string(),
+                images: Vec::new(),
+            }
         );
         assert!(widget.wq_submission_in_progress());
     }
@@ -2215,7 +2351,7 @@ mod tests {
         assert_eq!(
             widget.status_message(),
             Some(
-                ":w save  :wq save+quit  :q quit  :q!/:Q force quit  :W/:! alias  ZZ/ZQ quit  :l list  :? help"
+                ":w save  :wq save+quit  :paste paste image  :q quit  :q!/:Q force quit  :W/:! alias  ZZ/ZQ quit  :l list  :? help"
             )
         );
     }
@@ -2275,7 +2411,10 @@ mod tests {
 
         assert_eq!(
             second,
-            WidgetAction::SubmitCreateBeforeQuit("x".to_string())
+            WidgetAction::SubmitCreateBeforeQuit {
+                text: "x".to_string(),
+                images: Vec::new(),
+            }
         );
     }
 

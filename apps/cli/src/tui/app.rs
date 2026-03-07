@@ -14,13 +14,14 @@ use tokio::time::sleep;
 
 use crate::auth::{authenticate_with_stored_token, login_interactive};
 use crate::cli::resolve_text;
+use crate::composer_image::{PastedImage, read_image_from_clipboard};
 use crate::error::AppError;
 use crate::pending_submit_cache_store::{
     PendingSubmitCacheItem, append_dedup as append_pending_submit_cache,
     load as load_pending_submit_cache, save as save_pending_submit_cache,
 };
 use crate::session_store::load_cached_user_id;
-use crate::submission::submit_memo;
+use crate::submission::submit_memo_with_images;
 use crate::supabase::{
     DeleteMemoOutcome, InsertedMemo, RecentMemo, Session, SupabaseClient, UpdateMemoOutcome,
     extract_user_id_from_access_token,
@@ -72,7 +73,7 @@ enum BackgroundEvent {
     WqEditSuccess(EditSubmitSuccess),
     WqFailed {
         message: String,
-        text: String,
+        submit: PendingSubmitAction,
     },
 }
 
@@ -161,8 +162,9 @@ impl<'a> ComposeApp<'a> {
                 WidgetAction::RefreshHistory => {
                     self.handle_refresh_history(background_tx.clone());
                 }
-                WidgetAction::SubmitCreate(text) => {
-                    self.handle_submit_create(background_tx.clone(), text).await;
+                WidgetAction::SubmitCreate { text, images } => {
+                    self.handle_submit_create(background_tx.clone(), text, images)
+                        .await;
                 }
                 WidgetAction::SubmitEdit {
                     memo_id,
@@ -172,8 +174,8 @@ impl<'a> ComposeApp<'a> {
                     self.handle_submit_edit(background_tx.clone(), memo_id, expected_version, text)
                         .await;
                 }
-                WidgetAction::SubmitCreateBeforeQuit(text) => {
-                    self.start_wq_create_submission(background_tx.clone(), text);
+                WidgetAction::SubmitCreateBeforeQuit { text, images } => {
+                    self.start_wq_create_submission(background_tx.clone(), text, images);
                 }
                 WidgetAction::SubmitEditBeforeQuit {
                     memo_id,
@@ -195,6 +197,9 @@ impl<'a> ComposeApp<'a> {
                 }
                 WidgetAction::CopySelectedMemo => {
                     self.handle_copy_selected_memo();
+                }
+                WidgetAction::PasteImageFromClipboard => {
+                    self.handle_paste_image_from_clipboard();
                 }
                 WidgetAction::LoginForPendingSubmit(submit) => {
                     self.handle_login_for_pending_submit(
@@ -306,10 +311,15 @@ impl<'a> ComposeApp<'a> {
         });
     }
 
-    fn start_wq_create_submission(&self, tx: UnboundedSender<BackgroundEvent>, text: String) {
+    fn start_wq_create_submission(
+        &self,
+        tx: UnboundedSender<BackgroundEvent>,
+        text: String,
+        images: Vec<PastedImage>,
+    ) {
         let client = (*self.client).clone();
         tokio::spawn(async move {
-            run_wq_create_submission(client, text, tx).await;
+            run_wq_create_submission(client, text, images, tx).await;
         });
     }
 
@@ -417,15 +427,16 @@ impl<'a> ComposeApp<'a> {
                     }
                     should_quit = true;
                 }
-                BackgroundEvent::WqFailed { message, text } => {
+                BackgroundEvent::WqFailed { message, submit } => {
                     self.widget.on_wq_submission_failed(&message);
-                    if text.is_empty() {
+                    let text = pending_submit_text(&submit);
+                    if text.is_empty() && pending_submit_images(&submit).is_empty() {
                         self.widget.on_wq_submission_status(
                             "Save failed before cache step. Continue editing.",
                         );
                         continue;
                     }
-                    match append_pending_submit_cache(&text) {
+                    match append_pending_submit_cache(text, pending_submit_images(&submit)) {
                         Ok(()) => {
                             self.widget
                                 .on_wq_submission_status("Save failed; cached for next launch.");
@@ -444,8 +455,13 @@ impl<'a> ComposeApp<'a> {
         should_quit
     }
 
-    async fn handle_submit_create(&mut self, tx: UnboundedSender<BackgroundEvent>, text: String) {
-        let normalized = match resolve_text(Some(text)) {
+    async fn handle_submit_create(
+        &mut self,
+        tx: UnboundedSender<BackgroundEvent>,
+        text: String,
+        images: Vec<PastedImage>,
+    ) {
+        let normalized = match normalize_submission_text(&text, !images.is_empty()) {
             Ok(value) => value,
             Err(err) => {
                 self.widget.on_validation_error(&err.to_string());
@@ -459,13 +475,14 @@ impl<'a> ComposeApp<'a> {
                 self.widget
                     .show_auth_required_submit_prompt(PendingSubmitAction::Create {
                         text: normalized,
+                        images,
                     });
                 return;
             }
         };
 
         self.widget.on_submit_started();
-        self.start_submit_create_submission(tx, normalized, access_token);
+        self.start_submit_create_submission(tx, normalized, images, access_token);
     }
 
     async fn handle_submit_edit(
@@ -577,15 +594,31 @@ impl<'a> ComposeApp<'a> {
         }
     }
 
+    fn handle_paste_image_from_clipboard(&mut self) {
+        let next_index = self.widget.next_pasted_image_index();
+        match read_image_from_clipboard(next_index) {
+            Ok(image) => {
+                if let Err(err) = self.widget.add_pasted_image(image) {
+                    self.widget.on_validation_error(&err);
+                }
+            }
+            Err(err) => self.widget.on_validation_error(&err.to_string()),
+        }
+    }
+
     fn start_submit_create_submission(
         &self,
         tx: UnboundedSender<BackgroundEvent>,
         normalized: String,
+        images: Vec<PastedImage>,
         access_token: String,
     ) {
         let client = (*self.client).clone();
         tokio::spawn(async move {
-            let event = match client.insert_memo(&access_token, &normalized).await {
+            let event = match client
+                .insert_memo_with_images(&access_token, &normalized, &images)
+                .await
+            {
                 Ok(inserted) => BackgroundEvent::SubmitCreateSuccess {
                     normalized_text: normalized,
                     inserted,
@@ -593,7 +626,10 @@ impl<'a> ComposeApp<'a> {
                 Err(err) => {
                     let is_auth_error = is_auth_error(&err);
                     BackgroundEvent::SubmitFailed {
-                        submit: PendingSubmitAction::Create { text: normalized },
+                        submit: PendingSubmitAction::Create {
+                            text: normalized,
+                            images,
+                        },
                         message: err.to_string(),
                         is_auth_error,
                     }
@@ -657,8 +693,8 @@ impl<'a> ComposeApp<'a> {
                 self.cache_session(session);
                 self.widget.on_submit_started();
                 match submit {
-                    PendingSubmitAction::Create { text } => {
-                        self.start_submit_create_submission(tx, text, access_token);
+                    PendingSubmitAction::Create { text, images } => {
+                        self.start_submit_create_submission(tx, text, images, access_token);
                     }
                     PendingSubmitAction::Edit {
                         memo_id,
@@ -687,21 +723,22 @@ impl<'a> ComposeApp<'a> {
 async fn run_wq_create_submission(
     client: SupabaseClient,
     text: String,
+    images: Vec<PastedImage>,
     tx: UnboundedSender<BackgroundEvent>,
 ) {
-    let normalized = match resolve_text(Some(text)) {
+    let normalized = match normalize_submission_text(&text, !images.is_empty()) {
         Ok(value) => value,
         Err(err) => {
             let _ = tx.send(BackgroundEvent::WqFailed {
                 message: err.to_string(),
-                text: String::new(),
+                submit: PendingSubmitAction::Create { text, images },
             });
             return;
         }
     };
 
     for attempt in 1..=WQ_MAX_ATTEMPTS {
-        match submit_memo(&client, &normalized).await {
+        match submit_memo_with_images(&client, &normalized, &images).await {
             Ok(outcome) => {
                 let _ = tx.send(BackgroundEvent::WqCreateSuccess {
                     normalized_text: normalized,
@@ -713,7 +750,10 @@ async fn run_wq_create_submission(
                 if attempt >= WQ_MAX_ATTEMPTS {
                     let _ = tx.send(BackgroundEvent::WqFailed {
                         message: err.to_string(),
-                        text: normalized,
+                        submit: PendingSubmitAction::Create {
+                            text: normalized,
+                            images,
+                        },
                     });
                     return;
                 }
@@ -734,12 +774,16 @@ async fn run_wq_edit_submission(
     text: String,
     tx: UnboundedSender<BackgroundEvent>,
 ) {
-    let normalized = match resolve_text(Some(text)) {
+    let normalized = match resolve_text(Some(text.clone())) {
         Ok(value) => value,
         Err(err) => {
             let _ = tx.send(BackgroundEvent::WqFailed {
                 message: err.to_string(),
-                text: String::new(),
+                submit: PendingSubmitAction::Edit {
+                    memo_id,
+                    expected_version,
+                    text,
+                },
             });
             return;
         }
@@ -755,7 +799,11 @@ async fn run_wq_edit_submission(
                 if attempt >= WQ_MAX_ATTEMPTS {
                     let _ = tx.send(BackgroundEvent::WqFailed {
                         message: err.to_string(),
-                        text: normalized,
+                        submit: PendingSubmitAction::Edit {
+                            memo_id,
+                            expected_version,
+                            text: normalized,
+                        },
                     });
                     return;
                 }
@@ -791,7 +839,7 @@ async fn run_pending_submit_replay(client: SupabaseClient) {
 
     let mut failed_items: Vec<PendingSubmitCacheItem> = Vec::new();
     for item in cached_items {
-        let normalized = match resolve_text(Some(item.text.clone())) {
+        let normalized = match normalize_submission_text(&item.text, !item.images.is_empty()) {
             Ok(value) => value,
             Err(err) => {
                 eprintln!(
@@ -802,7 +850,10 @@ async fn run_pending_submit_replay(client: SupabaseClient) {
             }
         };
 
-        if let Err(err) = client.insert_memo(&session.access_token, &normalized).await {
+        if let Err(err) = client
+            .insert_memo_with_images(&session.access_token, &normalized, &item.images)
+            .await
+        {
             eprintln!(
                 "Warning: replay submit failed for cached item {}: {err}",
                 item.id
@@ -871,13 +922,35 @@ fn format_history_load_error(err: &AppError) -> String {
 
 fn pending_submit_text(submit: &PendingSubmitAction) -> &str {
     match submit {
-        PendingSubmitAction::Create { text } => text,
+        PendingSubmitAction::Create { text, .. } => text,
         PendingSubmitAction::Edit { text, .. } => text,
+    }
+}
+
+fn pending_submit_images(submit: &PendingSubmitAction) -> &[PastedImage] {
+    match submit {
+        PendingSubmitAction::Create { images, .. } => images,
+        PendingSubmitAction::Edit { .. } => &[],
     }
 }
 
 fn is_auth_error(err: &AppError) -> bool {
     matches!(err, AppError::Auth(_))
+}
+
+fn normalize_submission_text(raw: &str, allow_empty: bool) -> Result<String, AppError> {
+    let trimmed = raw.trim().to_string();
+    if trimmed.is_empty() && !allow_empty {
+        return Err(AppError::InvalidInput(
+            "Memo text is empty after trimming.".to_string(),
+        ));
+    }
+    if trimmed.len() > 20_000 {
+        return Err(AppError::InvalidInput(
+            "Memo text is too long (max 20000 characters).".to_string(),
+        ));
+    }
+    Ok(trimmed)
 }
 
 fn copy_to_clipboard(text: &str) -> Result<(), String> {
@@ -1074,6 +1147,7 @@ mod tests {
     fn pending_submit_text_uses_create_text() {
         let submit = PendingSubmitAction::Create {
             text: "draft".to_string(),
+            images: Vec::new(),
         };
         assert_eq!(pending_submit_text(&submit), "draft");
     }
