@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FileText, Loader2 } from "lucide-react";
-import { type AuthChangeEvent } from "@supabase/supabase-js";
+import { type AuthChangeEvent, type Session } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -100,7 +100,7 @@ export default function ResetPasswordPage() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(
-      (event: AuthChangeEvent, session) => {
+      (event: AuthChangeEvent, session: Session | null) => {
         if (isCancelled) {
           return;
         }
