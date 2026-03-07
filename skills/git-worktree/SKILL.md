@@ -1,17 +1,17 @@
 ---
 name: git-worktree
-description: Git worktree workflow for this monorepo: create, attach, sync, and clean worktrees under `.worktree/`, normalize branch-to-directory names (`feat/cli/vim` -> `feat-cli-vim`), and use `origin/main` as the default base for new branches. Use when Codex needs to manage branch-isolated work directories safely.
+description: Git worktree workflow for this monorepo: create, attach, sync, and clean sibling worktrees next to `main/`, normalize branch-to-directory names (`feat/cli/vim` -> `feat-cli-vim`), and use `origin/main` as the default base for new branches. Use when Codex needs to manage branch-isolated work directories safely.
 ---
 
 # Git Worktree
 
 Use this skill to manage branch-isolated work directories with one convention:
 - Keep branch names unchanged.
-- Store worktrees in `.worktree/`.
+- Store worktrees next to `main/`.
 - Map folder names with slash-to-dash normalization.
 
 Example mapping:
-- `feat/cli/vim` -> `.worktree/feat-cli-vim`
+- `feat/cli/vim` -> `../feat-cli-vim`
 
 ## Inputs
 
@@ -25,17 +25,16 @@ Example mapping:
 
 ```bash
 git fetch origin --prune
-mkdir -p .worktree
 ```
 
 3. Compute target directory with:
 
 ```bash
 worktree_name="${branch//\//-}"
-worktree_dir=".worktree/${worktree_name}"
+worktree_dir="../${worktree_name}"
 ```
 
-4. If `worktree_dir` already exists and is not reusable, append numeric suffixes (`-1`, `-2`, ...).
+4. If `worktree_dir` already exists and is not reusable, remove that worktree before recreating it.
 5. Never rename Git branches to match folder names.
 
 ## Workflow
@@ -46,7 +45,7 @@ worktree_dir=".worktree/${worktree_name}"
 branch="feat/cli/vim"
 base_ref="${base_ref:-origin/main}"
 worktree_name="${branch//\//-}"
-worktree_dir=".worktree/${worktree_name}"
+worktree_dir="../${worktree_name}"
 ```
 
 2. Create or attach worktree.
@@ -56,6 +55,8 @@ If local branch exists:
 ```bash
 git show-ref --verify --quiet "refs/heads/${branch}" \
   && git worktree add "${worktree_dir}" "${branch}"
+cd "${worktree_dir}"
+git rebase origin/main
 ```
 
 If local branch does not exist:
@@ -65,13 +66,9 @@ git show-ref --verify --quiet "refs/heads/${branch}" \
   || git worktree add "${worktree_dir}" -b "${branch}" "${base_ref}"
 ```
 
-3. Sync inside target worktree.
+3. Rebase only for existing branches.
 
-```bash
-git fetch origin --prune
-git rebase origin/main
-```
-
+New branches created from `origin/main` do not need an immediate `rebase origin/main`.
 Use merge only when explicitly requested by user or team policy.
 
 4. Cleanup with confirmation-first flow.
@@ -83,7 +80,7 @@ for branch in $(git branch --format='%(refname:short)' --merged origin/main); do
   case "$branch" in
     main|master|develop) continue ;;
   esac
-  echo "${branch} -> .worktree/${branch//\//-}"
+  echo "${branch} -> ../${branch//\//-}"
 done
 ```
 
@@ -91,9 +88,15 @@ After explicit confirmation, remove each candidate in order:
 
 ```bash
 branch="feat/cli/vim"
-git worktree remove ".worktree/${branch//\//-}"
+git worktree remove "../${branch//\//-}"
 git branch -d "${branch}"
 git worktree prune
+```
+
+If the directory still exists after `git worktree remove`, clean it manually:
+
+```bash
+rm -rf "../${branch//\//-}"
 ```
 
 ## Safety
@@ -107,7 +110,7 @@ git worktree prune
 - `fatal: 'X' is already checked out at ...`:
   Reuse that existing worktree path or remove it first.
 - `fatal: path already exists`:
-  Resolve folder collision with numeric suffix.
+  Run `git worktree remove <path>` first; if Git metadata is already detached but the directory remains, remove the directory and retry.
 - `error: Cannot delete branch ... checked out at ...`:
   Remove linked worktree first, then delete branch.
 - Removal blocked by local changes:
