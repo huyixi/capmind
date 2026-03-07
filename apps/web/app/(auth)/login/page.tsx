@@ -92,6 +92,14 @@ export default function LoginPage() {
               required
               className="bg-input border-border text-foreground placeholder:text-muted-foreground"
             />
+            <div className="flex justify-end">
+              <Link
+                href="/reset-password"
+                className="text-sm font-medium text-primary hover:underline"
+              >
+                Forgot password?
+              </Link>
+            </div>
           </div>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
