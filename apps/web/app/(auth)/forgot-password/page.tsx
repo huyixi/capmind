@@ -3,30 +3,31 @@
 import React from "react";
 
 import { useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { FileText, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Loader2, FileText } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 
-export default function LoginPage() {
+export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
   const router = useRouter();
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleRequestReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
     try {
       const supabase = createClient();
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+      const redirectTo = `${window.location.origin}/reset-password`;
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo,
       });
 
       if (error) {
@@ -34,8 +35,7 @@ export default function LoginPage() {
         return;
       }
 
-      router.push("/");
-      router.refresh();
+      setSuccess(true);
     } catch (err) {
       if (err instanceof TypeError && err.message.includes("Failed to fetch")) {
         setError(
@@ -43,11 +43,42 @@ export default function LoginPage() {
         );
         return;
       }
-      setError(err instanceof Error ? err.message : "Unexpected login error");
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unexpected password reset request error",
+      );
     } finally {
       setLoading(false);
     }
   };
+
+  if (success) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-4">
+        <div className="w-full max-w-sm space-y-6 text-center">
+          <div className="flex flex-col items-center space-y-2">
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+              Check your email
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              If an account exists for{" "}
+              <strong className="text-foreground">{email}</strong>, we sent a
+              password reset link.
+            </p>
+          </div>
+          <Button
+            onClick={() => router.push("/login")}
+            variant="outline"
+            className="w-full border-border text-foreground hover:bg-secondary"
+          >
+            Back to login
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -57,14 +88,14 @@ export default function LoginPage() {
             <FileText className="h-6 w-6 text-primary-foreground" />
           </div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-            Welcome back
+            Reset your password
           </h1>
           <p className="text-sm text-muted-foreground">
-            Sign in to your memo account
+            Enter your email and we&apos;ll send you a reset link.
           </p>
         </div>
 
-        <form onSubmit={handleLogin} className="space-y-4">
+        <form onSubmit={handleRequestReset} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="email" className="text-foreground">
               Email
@@ -79,28 +110,6 @@ export default function LoginPage() {
               className="bg-input border-border text-foreground placeholder:text-muted-foreground"
             />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="password" className="text-foreground">
-              Password
-            </Label>
-            <Input
-              id="password"
-              type="password"
-              placeholder="Enter your password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="bg-input border-border text-foreground placeholder:text-muted-foreground"
-            />
-            <div className="flex justify-end">
-              <Link
-                href="/forgot-password"
-                className="text-sm font-medium text-primary hover:underline"
-              >
-                Forgot password?
-              </Link>
-            </div>
-          </div>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
 
@@ -112,21 +121,18 @@ export default function LoginPage() {
             {loading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Signing in...
+                Sending reset link...
               </>
             ) : (
-              "Sign in"
+              "Send reset link"
             )}
           </Button>
         </form>
 
         <p className="text-center text-sm text-muted-foreground">
-          Don&apos;t have an account?{" "}
-          <Link
-            href="/signup"
-            className="font-medium text-primary hover:underline"
-          >
-            Sign up
+          Remembered your password?{" "}
+          <Link href="/login" className="font-medium text-primary hover:underline">
+            Sign in
           </Link>
         </p>
       </div>
