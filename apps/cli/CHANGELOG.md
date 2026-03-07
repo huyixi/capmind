@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/huyixi/capmind/compare/capmind-v0.9.1...capmind-v0.10.0) (2026-03-07)
+
+
+### Features
+
+* **cli:** add composer image paste support ([a165c4b](https://github.com/huyixi/capmind/commit/a165c4b5712433a0262eb553d2c59bc0ca97459b))
+
 ## [0.9.1](https://github.com/huyixi/capmind/compare/capmind-v0.9.0...capmind-v0.9.1) (2026-03-06)
 
 
