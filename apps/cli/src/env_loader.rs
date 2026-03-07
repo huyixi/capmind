@@ -60,6 +60,10 @@ fn candidate_paths() -> Vec<PathBuf> {
     if let Some(workspace_root) = workspace_root_from_manifest_dir() {
         paths.push(workspace_root.join(".env.local"));
         paths.push(workspace_root.join(".env"));
+        if let Some(shared_root) = workspace_root.parent() {
+            paths.push(shared_root.join(".env.local"));
+            paths.push(shared_root.join(".env"));
+        }
     }
 
     paths.push(PathBuf::from(".env.local"));

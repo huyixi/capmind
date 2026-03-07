@@ -7,6 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const webRoot = path.resolve(__dirname, "..");
 const monorepoRoot = path.resolve(webRoot, "../..");
+const sharedRoot = path.resolve(monorepoRoot, "..");
 
 function applyEnvFile(targetEnv, filePath) {
   if (!fs.existsSync(filePath)) {
@@ -62,6 +63,8 @@ function applySupabaseAliases(targetEnv) {
 const env = { ...process.env };
 applyEnvFile(env, path.join(monorepoRoot, ".env.local"));
 applyEnvFile(env, path.join(monorepoRoot, ".env"));
+applyEnvFile(env, path.join(sharedRoot, ".env.local"));
+applyEnvFile(env, path.join(sharedRoot, ".env"));
 applyEnvFile(env, path.join(webRoot, ".env.local"));
 applyEnvFile(env, path.join(webRoot, ".env"));
 applySupabaseAliases(env);
