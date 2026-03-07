@@ -267,7 +267,21 @@ fn render_composer(
         .scroll((vertical_scroll, 0));
     frame.render_widget(paragraph, input_area);
 
-    let footer = composer_footer_text(composer_mode, status_message.as_deref());
+    let attachment_summary = if widget.pasted_images().is_empty() {
+        None
+    } else if widget.pasted_images().len() == 1 {
+        Some(format!(
+            "1 image attached: {}",
+            widget.pasted_images()[0].filename
+        ))
+    } else {
+        Some(format!("{} images attached", widget.pasted_images().len()))
+    };
+    let footer = composer_footer_text(
+        composer_mode,
+        status_message.as_deref(),
+        attachment_summary.as_deref(),
+    );
     frame.render_widget(
         Paragraph::new(footer.clone()).style(text_style.add_modifier(Modifier::DIM)),
         Rect {
@@ -290,7 +304,11 @@ fn render_composer(
     }
 }
 
-fn composer_footer_text(mode: VimMode, status_message: Option<&str>) -> String {
+fn composer_footer_text(
+    mode: VimMode,
+    status_message: Option<&str>,
+    attachment_summary: Option<&str>,
+) -> String {
     let mode_label = if mode == VimMode::Insert {
         "[INSERT]"
     } else {
@@ -298,6 +316,8 @@ fn composer_footer_text(mode: VimMode, status_message: Option<&str>) -> String {
     };
 
     if let Some(value) = status_message {
+        format!("{mode_label} {value}")
+    } else if let Some(value) = attachment_summary {
         format!("{mode_label} {value}")
     } else {
         mode_label.to_string()
@@ -431,6 +451,8 @@ fn help_overlay_content(context: HelpOverlayContext) -> &'static str {
     match context {
         HelpOverlayContext::ComposerNormal => {
             "Composer NORMAL\n\
+Ctrl+V paste image from macOS clipboard\n\
+  :paste / :paste-image paste image\n\
   :w/:s submit | :W submit+quit on success\n\
 :q quit (confirm if unsaved) | :!/:Q force quit\n\
 ZZ save+quit | ZQ force quit\n\
@@ -636,15 +658,29 @@ mod tests {
     #[test]
     fn composer_footer_appends_status_after_mode() {
         assert_eq!(
-            composer_footer_text(VimMode::Insert, Some("saving...")),
+            composer_footer_text(VimMode::Insert, Some("saving..."), None),
             "[INSERT] saving..."
         );
     }
 
     #[test]
     fn composer_footer_uses_mode_when_no_status_or_quit_hint() {
-        assert_eq!(composer_footer_text(VimMode::Insert, None), "[INSERT]");
-        assert_eq!(composer_footer_text(VimMode::Normal, None), "[NORMAL]");
+        assert_eq!(
+            composer_footer_text(VimMode::Insert, None, None),
+            "[INSERT]"
+        );
+        assert_eq!(
+            composer_footer_text(VimMode::Normal, None, None),
+            "[NORMAL]"
+        );
+    }
+
+    #[test]
+    fn composer_footer_uses_attachment_summary_without_status() {
+        assert_eq!(
+            composer_footer_text(VimMode::Insert, None, Some("1 image attached")),
+            "[INSERT] 1 image attached"
+        );
     }
 
     #[test]
