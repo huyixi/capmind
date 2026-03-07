@@ -1,6 +1,10 @@
+#[cfg(target_os = "macos")]
 use arboard::Clipboard;
+#[cfg(target_os = "macos")]
 use image::ColorType;
+#[cfg(target_os = "macos")]
 use image::ImageEncoder;
+#[cfg(target_os = "macos")]
 use image::codecs::png::PngEncoder;
 use serde::{Deserialize, Serialize};
 
